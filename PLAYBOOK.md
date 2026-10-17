@@ -61,6 +61,8 @@ Write drafts in `~/novices/issues.md`, read them with Brad, and post the ones he
 
 - `bin/novice NAME` steps until it's Brad's turn. Run it again after he approves, merges or requests changes.
 - An issue the agent didn't finish, or one that came out over 300 lines, is marked tried. Fix or split the issue, then remove `~/novices/state/NAME/issue-N` to let it run again.
+- A failed CI run is rerun once before the agent revises. A test that passes on the rerun is named as flaky in the summary comment and log.md's CI column; a flaky test is a bug to fix with its own issue, not something to rerun forever.
+- A PR merged or closed before the loop came back to it still gets its log line on the next run.
 - A problem found after merge goes in log.md's After merge column, with a link. If a line in AGENTS.md would have prevented it, add one under "Mistakes agents have made" in a PR.
 - Vouching: once log.md shows about 10 merged PRs on a repository with nothing found after merge, Brad can set `vouched=1` in its settings. It changes only the label. Opening safety code to agents is a separate decision.
 
@@ -77,6 +79,7 @@ Write drafts in `~/novices/issues.md`, read them with Brad, and post the ones he
 - Brad can merge while CI or the reviewer is still running, so check the PR is still open before revising and before pushing. The required `review` status now stops this unless he bypasses.
 - The reviewer sees only the issue, the PR description and the diff. Evidence the worker posts in a revision comment counts only because review-pr includes those comments as the author's claims.
 - `Bash(node *)` lets the worker run anything through Node, so the allow list is looser than it reads. The sandbox and the missing tokens are what contain it.
+- bash reads a script as it runs, so editing `bin/novice` in place can break a run in progress. Write the new version to another file and `mv` it over; the running loop keeps the old one.
 - GitHub won't link a PR to a closed issue with `Closes #N`; reopen the issue first.
 - Brad's protected-path gate blocks commands that name credential paths or contain words like `.key` (even in a jq filter) and stops after two blocks. Check sandbox isolation from inside the sandbox without naming those paths in the outer command, or ask Brad to run the check.
 

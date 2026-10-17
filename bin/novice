@@ -7,6 +7,7 @@
 #
 # Limits: one agent PR open at a time; RUNS_PER_DAY worker runs a day; on each PR one automatic revision (a failed CI
 # run or a blocking review) and up to BRAD_REVISIONS more, each started by Brad choosing "Request changes" on the PR.
+# A failed CI run is rerun once before it counts, and a test that passes on the rerun is reported as flaky.
 # A change over max_lines (lib/tower.sh) isn't opened or pushed; the issue needs splitting. When it's Brad's turn on a
 # PR, the loop leaves a one-line summary and labels it needs-brad if he has to read it closely.
 # The worker runs in bin/sandbox with its own Claude token; this script pushes and talks to GitHub as brads-agents.
@@ -98,18 +99,43 @@ ci_result() {
 	timeout 1500 gh run watch -R "$repo" "$id" --exit-status --interval 30 > /dev/null 2>&1 && echo success || echo "failure $id"
 }
 
+# The verdict in the reviewer's marker on PR $1 for head $2, or nothing.
+marked_verdict() {
+	gh pr view -R "$repo" "$1" --json comments -q '[.comments[] | select(.author.login == "'$agent'") | .body
+		| capture("<!-- review-pr verdict=(?<v>[a-z]+) head=(?<h>[0-9a-f]+) -->") | select(.h == "'$2'") | .v] | last // empty'
+}
+
 # The reviewer's verdict on SHA, from its marker in the PR's comments; runs the reviewer if there's none yet.
 review_verdict() {
 	local verdict
-	verdict=$(gh pr view -R "$repo" "$1" --json comments -q '[.comments[] | select(.author.login == "'$agent'") | .body
-		| capture("<!-- review-pr verdict=(?<v>[a-z]+) head=(?<h>[0-9a-f]+) -->") | select(.h == "'$2'") | .v] | last // empty')
+	verdict=$(marked_verdict "$1" "$2")
 	if [ -z "$verdict" ]; then
 		[ "$dry_run" = 1 ] && { echo "not reviewed yet"; return; }
 		"$bin/review-pr" "$repo_name" "$1" >&2 || true
-		verdict=$(gh pr view -R "$repo" "$1" --json comments -q '[.comments[] | select(.author.login == "'$agent'") | .body
-			| capture("<!-- review-pr verdict=(?<v>[a-z]+) head=(?<h>[0-9a-f]+) -->") | select(.h == "'$2'") | .v] | last // "failed"')
+		verdict=$(marked_verdict "$1" "$2")
 	fi
-	echo "$verdict"
+	echo "${verdict:-failed}"
+}
+
+# The tests that failed in CI run $1, from Playwright's and node:test's output, one per line.
+failed_tests() {
+	gh run view -R "$repo" "$1" --log-failed 2> /dev/null | cut -f3- | sed -E 's/^[0-9TZ:.-]+ //' |
+		sed -nE 's/^ *✘ +[0-9]+ +(\[[a-z]+\] › )?(.*) \([0-9.]+m?s\)$/\2/p; s/^not ok [0-9]+ - (.*)$/\1/p' | sort -u | head -5
+}
+
+# The tests that failed on SHA's first CI run and passed on its rerun, comma-separated; nothing if it didn't happen.
+flaky_tests() {
+	[ -f "$state/rerun-$1" ] && [ "${2%% *}" = success ] || return 0
+	if [ -s "$state/rerun-$1" ]; then paste -sd, "$state/rerun-$1" | sed 's/,/, /g'; else echo "a step, not a named test"; fi
+}
+
+# Moves the log line saved for SHA into log.md, with its CI result $2 and review verdict $3.
+log_pending() {
+	[ -f "$state/pending-$1" ] || return 0
+	jq -r --arg date "$(date +%F)" --arg ci "$2" --arg review "$3" \
+		--arg name "$repo_name" '"| \($date) | \($name) | \(.what) | #\(.pr) | sonnet-5.5 medium | \(.turns) | $\(.cost) | \($ci) | \($review) | | |"' \
+		"$state/pending-$1" >> "$log"
+	rm "$state/pending-$1"
 }
 
 # The reviewer's latest comment on PR $1 for head $2.
@@ -148,7 +174,12 @@ summarize() {
 		[ "$unverified" -gt 0 ] || unverified=1
 	fi
 
-	case ${ci%% *} in success) parts+=("CI passed") ;; *) parts+=("CI failed") ;; esac
+	local flaky
+	flaky=$(flaky_tests "$head" "$ci")
+	case ${ci%% *} in
+		success) if [ -n "$flaky" ]; then parts+=("CI passed on a rerun (flaky: $flaky)"); else parts+=("CI passed"); fi ;;
+		*) parts+=("CI failed") ;;
+	esac
 	case $verdict in pass) parts+=("review passed") ;; block) parts+=("review blocked") ;; *) parts+=("review didn't run") ;; esac
 	parts+=("$lines lines")
 	if [ -n "$flagged_list" ]; then parts+=("flagged: $flagged_list"); reasons+=("flagged files"); else parts+=("no flagged files"); fi
@@ -182,14 +213,27 @@ step_pr() {
 		set_label "$pr" "vouch:$([ "$vouched" = 1 ] && echo trusted || echo unvouched)"
 	fi
 	ci=$(ci_result "$head"); say "CI: $ci"
+	# A failure is rerun once before the agent is sent after it, since it may be a flaky test the PR didn't cause.
+	if [ "${ci%% *}" = failure ] && [ ! -f "$state/rerun-$head" ] && [ "$(pr_state "$pr")" = OPEN ]; then
+		if [ "$dry_run" = 1 ]; then
+			say "would rerun the failed CI job once"
+		else
+			failed_tests "${ci#failure }" > "$state/rerun-$head"
+			say "rerunning the failed CI job once, in case it's flaky: $(paste -sd, "$state/rerun-$head")"
+			gh run rerun -R "$repo" "${ci#failure }" --failed > /dev/null || say "the rerun couldn't be started"
+			for _ in $(seq 20); do
+				[ "$(gh run view -R "$repo" "${ci#failure }" --json status -q .status)" != completed ] && break
+				sleep 3
+			done
+			ci=$(ci_result "$head"); say "CI on the rerun: $ci"
+		fi
+	fi
+	local flaky
+	flaky=$(flaky_tests "$head" "$ci")
+	[ -z "$flaky" ] || say "flaky: $flaky"
 	verdict=$(review_verdict "$pr" "$head"); say "review: $verdict"
 
-	if [ "$dry_run" = 0 ] && [ -f "$state/pending-$head" ]; then
-		jq -r --arg date "$(date +%F)" --arg ci "${ci%% *}" --arg review "$verdict" \
-			--arg name "$repo_name" '"| \($date) | \($name) | \(.what) | #\(.pr) | sonnet-5.5 medium | \(.turns) | $\(.cost) | \($ci) | \($review) | | |"' \
-			"$state/pending-$head" >> "$log"
-		rm "$state/pending-$head"
-	fi
+	if [ "$dry_run" = 0 ]; then log_pending "$head" "${ci%% *}${flaky:+ on a rerun (flaky: $flaky)}" "$verdict"; fi
 
 	# Brad can merge or close it while CI or the reviewer runs.
 	if [ "$(pr_state "$pr")" != OPEN ]; then say "PR #$pr is $(pr_state "$pr") now; moving on"; return 0; fi
@@ -336,6 +380,20 @@ $(result)" > /dev/null
 	opened="$pr $branch $(git rev-parse HEAD)"
 	return 0
 }
+
+# PRs merged or closed before the loop came back to them still get their log line, with CI and the review as they stood.
+if [ "$dry_run" = 0 ]; then
+	for file in "$state"/pending-*; do
+		[ -e "$file" ] || continue
+		head=${file##*/pending-} pr=$(jq -r .pr "$file")
+		pr_now=$(pr_state "$pr")
+		[ "$pr_now" = OPEN ] && continue
+		ci=$(gh run list -R "$repo" --commit "$head" --workflow ci.yml --limit 1 --json conclusion -q '.[0].conclusion // "none"')
+		verdict=$(marked_verdict "$pr" "$head")
+		log_pending "$head" "${ci:-none}" "${verdict:-none}, ${pr_now,,} before the loop came back"
+		say "logged PR #$pr, ${pr_now,,} before the loop came back to it"
+	done
+fi
 
 # Brad's own open PRs are trusted.
 if [ "$dry_run" = 0 ]; then

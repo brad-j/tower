@@ -14,3 +14,6 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-17 | gaidin | #4 follow-up to #9 (the revision made for #9, pushed after its merge) | #10 | sonnet-5.5 medium | 10 | $0.09 | success | block | | |
 | 2026-10-17 | gaidin | #4 revision (auto) | #10 | sonnet-5.5 medium | 4 | $0.08 | success | pass | | |
 | 2026-10-17 | moiraine | #2 Service worker can keep a shell whose build files it doesn't have, so the app opens blank offline | #10 | sonnet-5.5 medium | 8 | $0.15 | success | pass | | |
+| 2026-10-17 | moiraine | #3 An open app never notices a new protocol or a new build | #11 | sonnet-5.5 medium | 22 | $0.42 | failure | block | | |
+| 2026-10-17 | moiraine | #3 revision (auto) | #11 | sonnet-5.5 medium | 5 | $0.14 | success | pass | | |
+| 2026-10-17 | moiraine | #1 Alt+Y/A/N answer approvals while typing in any field (Option+N on a Mac denies) | #9 | sonnet-5.5 medium | 13 | $0.16 | success | none, merged before the loop came back | | |
