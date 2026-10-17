@@ -5,6 +5,8 @@ repo=brad-j/gaidin
 # hook refusing main.
 clone=$HOME/novices/gaidin
 state=$HOME/novices/state/gaidin
+# Repositories (OWNER/NAME) checked out beside the clone at their main, refreshed before each run, read-only to the worker.
+siblings=()
 
 # Run inside the sandbox before each worker run, since package.json may be the agent's.
 setup=(pnpm install --frozen-lockfile)

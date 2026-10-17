@@ -139,7 +139,6 @@ fi
 echo "$repo_name: the agents' clone, $clone"
 url=https://github.com/$repo.git
 helper='!f() { test "$1" = get || exit 0; t=$(cat '"$agent_token"' 2>/dev/null) || { echo "no agent token in ~/.config/gh-agents/token" >&2; exit 1; }; printf '"'"'username='"$agent"'\npassword=%s\n'"'"' "$t"; }; f'
-mkdir -p "$state"
 if [ ! -d "$clone/.git" ]; then
 	change "clone $repo" git clone -q "$url" "$clone"
 fi
@@ -166,26 +165,34 @@ if [ -d "$clone/.git" ]; then
 else
 	echo "  would  set its identity, credential helper and pre-push hook"
 fi
+# Siblings are only fetched and read, never pushed, so they need none of the clone's settings.
+for sibling in "${siblings[@]}"; do
+	dir=$(sibling_dir "$sibling")
+	if [ -d "$dir/.git" ]; then ok "$sibling is checked out beside it, at $dir"
+	else change "clone $sibling beside it, at $dir" git clone -q "https://github.com/$sibling.git" "$dir"; fi
+done
 
 echo "$repo_name: the check in the sandbox"
 if [ "$apply" = 0 ]; then
-	echo "  skip   runs with --apply: ${setup[*]}, then $check, on main"
+	echo "  skip   runs with --apply: ${setup[*]}, then $check, on main${siblings:+ with ${siblings[*]} on their main}"
 else
-	sandbox_args=()
-	for path in "${sandbox_ro[@]}"; do sandbox_args+=(--ro-bind "$path" "$path"); done
+	mkdir -p "$state"
 	exec 9> "$state/lock"
 	flock -n 9 || { echo "  a novice run is using the clone; run this again after it" >&2; exit 1; }
 	git -C "$clone" fetch -q --prune origin
 	git -C "$clone" reset -q --hard && git -C "$clone" clean -qfd
 	git -C "$clone" checkout -q --detach origin/main
-	if ! "$tower/bin/sandbox" "$clone" "${sandbox_args[@]}" -- "${setup[@]}" > "$work/setup.log" 2>&1; then
+	if ! refresh_siblings "$work/setup.log"; then
+		tail -5 "$work/setup.log" | sed 's/^/         /'
+		todo "refreshing or installing ${siblings[*]} fails"
+	elif ! "$tower/bin/sandbox" "$clone" "${sandbox_args[@]}" "${sibling_args[@]}" -- "${setup[@]}" > "$work/setup.log" 2>&1; then
 		tail -5 "$work/setup.log" | sed 's/^/         /'
 		todo "${setup[*]} fails in the sandbox"
-	elif ! "$tower/bin/sandbox" "$clone" "${sandbox_args[@]}" -- bash -c "$check" > "$work/check.log" 2>&1; then
+	elif ! "$tower/bin/sandbox" "$clone" "${sandbox_args[@]}" "${sibling_args[@]}" -- bash -c "$check" > "$work/check.log" 2>&1; then
 		tail -15 "$work/check.log" | sed 's/^/         /'
 		todo "$check fails in the sandbox; add what it needs to sandbox_ro, or fix the repository"
-	elif grep -Eq '(# |ℹ )skipped [1-9]' "$work/check.log"; then
-		todo "$check passes in the sandbox but skips tests: $(grep -E '(# |ℹ )skipped' "$work/check.log" | head -1)"
+	elif grep -Eq '(# |ℹ )skipped [1-9]|^ +[0-9]+ skipped' "$work/check.log"; then
+		todo "$check passes in the sandbox but skips tests: $(grep -E '(# |ℹ )skipped [1-9]|^ +[0-9]+ skipped' "$work/check.log" | head -1)"
 	else
 		ok "$check passes in the sandbox at $(git -C "$clone" rev-parse --short HEAD)"
 	fi

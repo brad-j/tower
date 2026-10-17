@@ -9,14 +9,14 @@ How to add a repository to tower and run the loop on it. Steps marked "session" 
 - The stack is one tower supports: Node with pnpm on Linux. Not yet: Swift and macOS (amyrlin) need a Mac worker and a macOS sandbox; Rust needs `~/.cargo` and `~/.rustup` in `sandbox_ro` and its own CI template.
 - One command runs the type check, lint and tests, with no keys, no personal config and no network beyond installing packages. If the tests wouldn't catch a broken change, the first issues add tests.
 - It's public. Rulesets on private repositories need GitHub Pro.
-- Note any sibling it depends on (`link:../NAME` in package.json). The clone needs the sibling checked out beside it, read-only in the sandbox; tower doesn't do this yet (moiraine is the first case).
+- Note any sibling it depends on (`link:../NAME` in package.json) and list it in `siblings`. tower checks it out beside the clone at its main, refreshes and installs it before each run, and mounts it read-only for the worker. Its tests must not write into the sibling.
 - tower works only in `~/novices/NAME`. Brad's own checkout and its uncommitted work are never touched.
 
 ### 2. Settings (session)
 
 Copy `repos/gaidin.sh` to `repos/NAME.sh` and fill in each field:
 
-- `repo`, `clone` (`$HOME/novices/NAME`), `state` (`$HOME/novices/state/NAME`).
+- `repo`, `clone` (`$HOME/novices/NAME`, or `$HOME/novices/NAME/NAME` with siblings beside it), `state` (`$HOME/novices/state/NAME`), `siblings`.
 - `setup`: the install command, from the lockfile. `check`: the command CI runs.
 - `allowed`: the worker's tools. Start from gaidin's.
 - `sandbox_ro`: caches the check needs, such as pnpm's store and `~/.cache/ms-playwright`. `tower add-repo NAME --apply` runs the check in the sandbox and shows what fails without them.

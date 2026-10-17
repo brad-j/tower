@@ -67,8 +67,31 @@ load_settings() {
 	fi
 	# shellcheck source=/dev/null
 	. "$file"
-	for var in repo clone state setup check allowed sandbox_ro flagged safety_paths unprovable uncounted public vouched; do
+	for var in repo clone siblings state setup check allowed sandbox_ro flagged safety_paths unprovable uncounted public vouched; do
 		declare -p "$var" > /dev/null 2>&1 || { echo "$file doesn't set $var" >&2; exit 1; }
+	done
+	# bwrap options for the sandbox: the repo's caches read-only, and separately its siblings read-only.
+	sandbox_args=() sibling_args=()
+	local path sibling
+	for path in "${sandbox_ro[@]}"; do sandbox_args+=(--ro-bind "$path" "$path"); done
+	for sibling in "${siblings[@]}"; do
+		path=$(sibling_dir "$sibling")
+		sibling_args+=(--ro-bind "$path" "$path")
+	done
+}
+
+# Where the checkout of sibling OWNER/NAME lives: NAME beside the clone.
+sibling_dir() { echo "$(dirname "$clone")/${1##*/}"; }
+
+# Brings each sibling to its origin/main and installs its dependencies with the repo's setup command in the sandbox,
+# the only time a sibling is writable there. Appends the output to the file $1.
+refresh_siblings() {
+	local sibling dir
+	for sibling in "${siblings[@]}"; do
+		dir=$(sibling_dir "$sibling")
+		git -C "$dir" fetch -q --prune origin || return 1
+		git -C "$dir" reset -q --hard origin/main && git -C "$dir" clean -qfd || return 1
+		"$tower/bin/sandbox" "$dir" "${sandbox_args[@]}" -- "${setup[@]}" >> "$1" 2>&1 || return 1
 	done
 }
 

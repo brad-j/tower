@@ -29,8 +29,6 @@ dry_run=0
 say() { echo "$(date +%H:%M:%S) $*"; }
 # Prints the arguments after SEP, separated by it.
 join() { local sep=$1 out=$2 item; shift 2; for item in "$@"; do out+="$sep$item"; done; printf '%s' "$out"; }
-sandbox_args=()
-for path in "${sandbox_ro[@]}"; do sandbox_args+=(--ro-bind "$path" "$path"); done
 
 mkdir -p "$state"
 exec 9> "$state/lock"
@@ -46,11 +44,13 @@ count() { cat "$state/$1" 2>/dev/null || echo 0; }
 bump() { echo $(($(count "$1") + 1)) > "$state/$1"; }
 
 # A clean checkout of BRANCH at START, with dependencies installed inside the sandbox, since package.json may be the agent's.
+# Siblings are brought to their main first, and are read-only to everything after.
 checkout() {
 	git fetch -q --prune origin
 	git reset -q --hard && git clean -qfd
 	git checkout -q -B "$1" "$2"
-	"$bin/sandbox" "$repo_dir" "${sandbox_args[@]}" -- "${setup[@]}" > "$work/install.log" 2>&1 || { say "${setup[*]} failed:"; tail -5 "$work/install.log"; exit 1; }
+	refresh_siblings "$work/install.log" || { say "refreshing ${siblings[*]} failed:"; tail -5 "$work/install.log"; exit 1; }
+	"$bin/sandbox" "$repo_dir" "${sandbox_args[@]}" "${sibling_args[@]}" -- "${setup[@]}" > "$work/install.log" 2>&1 || { say "${setup[*]} failed:"; tail -5 "$work/install.log"; exit 1; }
 }
 
 # Runs the worker on the prompt in $1, leaving Claude's JSON in $work/worker.json.
@@ -58,7 +58,7 @@ worker() {
 	local claude_token
 	claude_token=$(cat "$HOME/.config/novices/claude-token") || { say "no Claude token in ~/.config/novices/claude-token (claude setup-token)"; exit 1; }
 	date +%T >> "$state/runs-$(date +%F)"
-	CLAUDE_CODE_OAUTH_TOKEN=$claude_token timeout 1800 "$bin/sandbox" "$repo_dir" "${sandbox_args[@]}" -- \
+	CLAUDE_CODE_OAUTH_TOKEN=$claude_token timeout 1800 "$bin/sandbox" "$repo_dir" "${sandbox_args[@]}" "${sibling_args[@]}" -- \
 		claude -p --model "$model" --effort medium --max-budget-usd "$budget" --output-format json \
 		--strict-mcp-config --setting-sources project --no-session-persistence \
 		--allowedTools "${allowed[@]}" --disallowedTools "${denied[@]}" < "$1" > "$work/worker.json" 2> "$work/worker.err" || true
