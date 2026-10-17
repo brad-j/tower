@@ -71,6 +71,7 @@ Write drafts in `~/novices/issues.md`, read them with Brad, and post the ones he
 - gh falls back to the keyring login when its config dir has none, so a script meant to act as the agent can act as Brad. Always set `GH_TOKEN` from the agent's token file.
 - `gh pr list --author` goes through search and misses a PR opened seconds ago. List all open PRs and filter by author. Right after a push, `gh pr list` can still show the old head.
 - Tests that skip themselves when a tool can't start make a broken runner look green. CI fails on any skipped test.
+- GitHub's runners have 2 CPUs and egwene has 16, so timing bugs can fail only in CI. Reproduce them with `taskset -c 0,1` in front of the sandbox command and `--workers=1`. moiraine's first CI run found one this way: the New thread page's dock missed requests that opened after it loaded.
 - `claude -p --max-budget-usd` works on the subscription, overshoots by about one turn, and each run costs about $0.02 before any work. There's no max-turns flag. Typical costs: worker $0.06 to $0.12, review $0.01 to $0.03.
 - A worker run that fails before working (401, crash, timeout) must not mark the issue tried or post to GitHub.
 - Brad can merge while CI or the reviewer is still running, so check the PR is still open before revising and before pushing. The required `review` status now stops this unless he bypasses.
