@@ -79,3 +79,11 @@ Write drafts in `~/novices/issues.md`, read them with Brad, and post the ones he
 - `Bash(node *)` lets the worker run anything through Node, so the allow list is looser than it reads. The sandbox and the missing tokens are what contain it.
 - GitHub won't link a PR to a closed issue with `Closes #N`; reopen the issue first.
 - Brad's protected-path gate blocks commands that name credential paths or contain words like `.key` (even in a jq filter) and stops after two blocks. Check sandbox isolation from inside the sandbox without naming those paths in the outer command, or ask Brad to run the check.
+
+## Gaps
+
+Found while adding moiraine, the first repository added through this playbook.
+
+- Fixed: tower had no sibling checkouts, and `add-repo` without `--apply` created the state directory.
+- Open: `add-repo` runs its sandbox check on all of egwene's CPUs, so it misses timing failures that GitHub's 2-CPU runners hit. Running it under `taskset -c 0,1` would match CI.
+- Open: the sandbox check only runs once AGENTS.md and CI are on main, so a repository's tests are first tried in the sandbox by hand (step 1). `add-repo` could offer the check earlier, on Brad's checkout or a scratch clone.
