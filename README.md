@@ -2,7 +2,7 @@
 
 Runs coding agents on Brad's repositories through small GitHub issues, branches and PRs, with tests as the merge gate and an adversarial reviewer that shares no memory with the worker. Each repository gets a settings file; the scripts don't name any one of them.
 
-To add a repository, follow `PLAYBOOK.md`. What only Brad does is in `CHECKLIST.md`.
+To set tower up on a machine, follow `SETUP.md`. To add a repository, follow `PLAYBOOK.md`. What only Brad does is in `CHECKLIST.md`.
 
 ## Commands
 
