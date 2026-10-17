@@ -5,6 +5,26 @@ tower=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)
 # Bigger diffs aren't opened, pushed or reviewed; the issue gets split instead.
 max_lines=300
 
+# Labels tower uses on each repository, as NAME|COLOR|DESCRIPTION.
+labels=(
+	"agent|5319E7|Ready for an agent to work on"
+	"needs-brad|D876E3|Brad reads this PR closely: flagged files, safety code, docs, or something a test can't prove"
+	"size:S|0E8A16|Under 30 changed lines, lockfiles not counted"
+	"size:M|FBCA04|30 to 99 changed lines, lockfiles not counted"
+	"size:L|D93F0B|100 to 300 changed lines, lockfiles not counted"
+	"size:XL|B60205|Over 300 changed lines: over the limit, split it"
+	"vouch:trusted|0E8A16|Written by Brad, or by the agent on a repo where Brad has vouched for it"
+	"vouch:unvouched|FBCA04|Written by the agent before it has earned trust on this repo: read with more care"
+)
+
+# The size label for a count of changed lines.
+size_label() {
+	if [ "$1" -lt 30 ]; then echo size:S
+	elif [ "$1" -lt 100 ]; then echo size:M
+	elif [ "$1" -le "$max_lines" ]; then echo size:L
+	else echo size:XL; fi
+}
+
 load_settings() {
 	repo_name=${1:-}
 	local file=$tower/repos/$repo_name.sh var
@@ -14,7 +34,7 @@ load_settings() {
 	fi
 	# shellcheck source=/dev/null
 	. "$file"
-	for var in repo clone state setup check allowed sandbox_ro flagged safety_paths unprovable uncounted public; do
+	for var in repo clone state setup check allowed sandbox_ro flagged safety_paths unprovable uncounted public vouched; do
 		declare -p "$var" > /dev/null 2>&1 || { echo "$file doesn't set $var" >&2; exit 1; }
 	done
 }

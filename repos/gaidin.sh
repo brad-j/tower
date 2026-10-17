@@ -35,3 +35,7 @@ uncounted=(pnpm-lock.yaml)
 
 # Public repositories get the reviewer's check for host names, addresses, people, home paths and secrets.
 public=1
+
+# Brad sets this to 1 to vouch for the agent here, once log.md shows about 10 merged PRs with nothing found after merge.
+# It only changes the agent's PRs from vouch:unvouched to vouch:trusted; every check and label still applies.
+vouched=0

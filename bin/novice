@@ -117,6 +117,15 @@ review_comment() { gh pr view -R "$repo" "$1" --json comments -q '[.comments[] |
 
 pr_state() { gh pr view -R "$repo" "$1" --json state -q .state; }
 
+# Gives PR $1 the label $2, removing any other label with the same prefix (size:, vouch:).
+set_label() {
+	local pr=$1 want=$2 have found=0
+	for have in $(gh pr view -R "$repo" "$pr" --json labels -q '.labels[].name | select(startswith("'"${want%%:*}"':"))'); do
+		if [ "$have" = "$want" ]; then found=1; else gh api -X DELETE "repos/$repo/issues/$pr/labels/$have" > /dev/null; fi
+	done
+	[ "$found" = 1 ] || gh api -X POST "repos/$repo/issues/$pr/labels" -f "labels[]=$want" > /dev/null
+}
+
 # Ends the loop's turn on PR $1 at head $2 (CI $3, review $4): a one-line summary comment, once for each head and outcome,
 # and the needs-brad label when it touches flagged files or safety code, changes files a test can't prove (docs), or the
 # reviewer listed done conditions it couldn't verify. A head without those loses the label.
@@ -167,6 +176,11 @@ step_pr() {
 	issue=$(gh pr view -R "$repo" "$pr" --json closingIssuesReferences -q '.closingIssuesReferences[0].number // empty')
 	[ -n "$issue" ] || { say "PR #$pr doesn't close an issue, so it can't be reviewed or revised; over to Brad"; return 1; }
 	say "PR #$pr (issue #$issue) at ${head:0:7}"
+	if [ "$dry_run" = 0 ]; then
+		git fetch -q origin main "pull/$pr/head"
+		set_label "$pr" "$(size_label "$(diff_lines "$head")")"
+		set_label "$pr" "vouch:$([ "$vouched" = 1 ] && echo trusted || echo unvouched)"
+	fi
 	ci=$(ci_result "$head"); say "CI: $ci"
 	verdict=$(review_verdict "$pr" "$head"); say "review: $verdict"
 
@@ -320,6 +334,14 @@ $(result)" > /dev/null
 	opened="$pr $branch $(git rev-parse HEAD)"
 	return 0
 }
+
+# Brad's own open PRs are trusted.
+if [ "$dry_run" = 0 ]; then
+	for n in $(gh pr list -R "$repo" --state open --json number,author,labels \
+		-q '.[] | select(.author.login == "'$owner'" and ([.labels[].name] | index("vouch:trusted") | not)) | .number'); do
+		set_label "$n" vouch:trusted
+	done
+fi
 
 while true; do
 	# Not --author, which goes through GitHub's search index and can miss a PR opened seconds ago.

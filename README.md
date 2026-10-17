@@ -14,6 +14,7 @@ What they leave on a PR:
 
 - review-pr sets the commit status `review`, which the repo's `main` ruleset requires alongside CI: pending while it runs, success, failure on blocking findings, error if it didn't run. An unreviewed or blocked PR can't merge without an admin bypass.
 - When it's Brad's turn, novice posts a one-line summary (CI, review, lines changed, flagged files, docs, how many done conditions the reviewer couldn't verify) and adds the `needs-brad` label if the PR touches flagged files or safety code, changes docs, or has unverified done conditions.
+- novice labels each agent PR by size (`size:S` under 30 changed lines, `size:M` under 100, `size:L` up to 300, `size:XL` over) and by trust: `vouch:unvouched` until Brad sets `vouched=1` in the repo's settings, then `vouch:trusted`. Brad's own PRs get `vouch:trusted`. Vouching changes only the label. `lib/tower.sh` lists every label tower uses.
 - Diffs over 300 changed lines (`max_lines` in `lib/tower.sh`, lockfiles not counted) aren't opened, pushed or reviewed. The issue needs splitting.
 
 ## Layout
