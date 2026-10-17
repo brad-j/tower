@@ -14,7 +14,6 @@ set -euo pipefail
 load_settings "${1:-}"
 shift
 repo_dir=$clone
-token_file=$HOME/.config/gh-agents/token
 model=claude-sonnet-5-5
 budget=0.75
 max_diff_bytes=150000
@@ -35,14 +34,12 @@ if [ -z "$pr" ] && { [ -z "$head" ] || [ -z "$issue" ]; }; then echo "$usage" >&
 [ -z "$pr" ] && dry_run=1
 
 # The agent's token always wins over the keyring, so nothing here acts as Brad.
-GH_TOKEN=$(cat "$token_file") || { echo "no agent token in $token_file" >&2; exit 1; }
+GH_TOKEN=$(cat "$agent_token") || { echo "no agent token in $agent_token" >&2; exit 1; }
 export GH_TOKEN
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cd "$repo_dir"
 git fetch -q origin main
-
-agent=brads-agents
 
 # Sets the status when reviewing a PR for real; a dry run only prints.
 status() { [ "$dry_run" = 1 ] || review_status "$head" "$@"; }

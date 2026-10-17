@@ -2,6 +2,12 @@
 # Sets tower (this repository's root) and repo_name, plus whatever the settings file sets.
 
 tower=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)
+
+# Brad's GitHub account, and the machine account the agents act as. Only bin/tower uses Brad's login.
+owner=brad-j
+agent=brads-agents
+agent_email=344078136+brads-agents@users.noreply.github.com
+agent_token=$HOME/.config/gh-agents/token
 # Bigger diffs aren't opened, pushed or reviewed; the issue gets split instead.
 max_lines=300
 
@@ -16,6 +22,33 @@ labels=(
 	"vouch:trusted|0E8A16|Written by Brad, or by the agent on a repo where Brad has vouched for it"
 	"vouch:unvouched|FBCA04|Written by the agent before it has earned trust on this repo: read with more care"
 )
+
+# The names in labels, space-separated.
+join_names() { printf '%s\n' "$@" | cut -d'|' -f1 | paste -sd' '; }
+
+# CI's job name, which the main ruleset requires; every repo's CI workflow has a job by this name.
+ci_job=check
+
+# The main ruleset for a repo whose CI runs on the app INTEGRATION (GitHub Actions is 15368): a PR with one approval,
+# CI's job and the reviewer's review status required, no force push or deletion, and admins (Brad) can bypass.
+ruleset_spec() {
+	jq -n --arg job "$ci_job" --argjson app "$1" '{
+		name: "main", target: "branch", enforcement: "active",
+		conditions: {ref_name: {exclude: [], include: ["~DEFAULT_BRANCH"]}},
+		bypass_actors: [{actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always"}],
+		rules: [
+			{type: "deletion"},
+			{type: "non_fast_forward"},
+			{type: "pull_request", parameters: {
+				required_approving_review_count: 1, dismiss_stale_reviews_on_push: true, required_reviewers: [],
+				require_code_owner_review: false, require_last_push_approval: false,
+				required_review_thread_resolution: false, require_extra_approval_for_unattributed_changes: true,
+				allowed_merge_methods: ["merge", "squash", "rebase"]}},
+			{type: "required_status_checks", parameters: {
+				strict_required_status_checks_policy: false, do_not_enforce_on_create: false,
+				required_status_checks: [{context: $job, integration_id: $app}, {context: "review"}]}}
+		]}'
+}
 
 # The size label for a count of changed lines.
 size_label() {

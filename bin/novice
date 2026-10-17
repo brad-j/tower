@@ -18,8 +18,6 @@ shift
 repo_dir=$clone
 bin=$tower/bin
 log=$tower/log.md
-owner=brad-j
-agent=brads-agents
 model=claude-sonnet-5-5
 budget=3
 RUNS_PER_DAY=10
@@ -37,7 +35,7 @@ for path in "${sandbox_ro[@]}"; do sandbox_args+=(--ro-bind "$path" "$path"); do
 mkdir -p "$state"
 exec 9> "$state/lock"
 flock -n 9 || { say "another novice run is going"; exit 0; }
-GH_TOKEN=$(cat "$HOME/.config/gh-agents/token")
+GH_TOKEN=$(cat "$agent_token")
 export GH_TOKEN
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT

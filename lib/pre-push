@@ -1,0 +1,10 @@
+#!/bin/sh
+# Installed in the agents' clones by tower add-repo. Agents never push to main; the main ruleset enforces that on GitHub,
+# and this catches it sooner.
+while read -r local_ref local_sha remote_ref remote_sha; do
+	if [ "$remote_ref" = "refs/heads/main" ]; then
+		echo "pre-push: agents don't push to main. Push a branch and open a PR with gh pr create." >&2
+		exit 1
+	fi
+done
+exit 0

@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Sets up a repository for the agent loop from its settings in repos/NAME.sh. The judgment steps come first (the
+# settings file, AGENTS.md, CI; see PLAYBOOK.md); this checks them and does the rest.
+#
+#   tower add-repo NAME            check that NAME is ready and list what setup would change; changes nothing
+#   tower add-repo NAME --apply    make those changes
+#
+# Setup: brads-agents as a collaborator with write, its invitation accepted; merged branches deleted; tower's labels;
+# the main ruleset (a PR with one approval, CI's check and review required, no force push or deletion, admins can
+# bypass); the agents' clone with its remote, identity, credential helper and pre-push hook; and the check passing in
+# the sandbox. Running it again changes only what has drifted.
+#
+# Repository settings need an admin, so this uses Brad's own gh login, except to accept the invitation as brads-agents.
+# Brad runs it, or a session runs it with his go-ahead. bin/novice and bin/review-pr never use his login.
+set -euo pipefail
+
+. "$(dirname "$(realpath "$0")")/../lib/tower.sh"
+usage="usage: tower add-repo NAME [--apply]"
+[ "${1:-}" = add-repo ] && [ -n "${2:-}" ] || { echo "$usage" >&2; exit 1; }
+if [ ! -f "$tower/repos/$2.sh" ]; then
+	echo "no repos/$2.sh yet: copy repos/gaidin.sh and fill it in for $2 (PLAYBOOK.md, step 2)" >&2
+	exit 1
+fi
+load_settings "$2"
+apply=0
+case ${3:-} in --apply) apply=1 ;; "") ;; *) echo "$usage" >&2; exit 1 ;; esac
+
+as_brad() { env -u GH_TOKEN -u GITHUB_TOKEN gh "$@"; }
+as_agent() { GH_TOKEN=$(cat "$agent_token") gh "$@"; }
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+todos=0 changes=0
+ok() { echo "  ok     $*"; }
+# A step for Brad or a session with him, from PLAYBOOK.md.
+todo() { echo "  TODO   $*"; todos=$((todos + 1)); }
+# change WHAT COMMAND...: runs COMMAND with --apply; otherwise says it would.
+change() {
+	local what=$1
+	shift
+	changes=$((changes + 1))
+	if [ "$apply" = 1 ]; then
+		"$@"
+		echo "  done   $what"
+	else
+		echo "  would  $what"
+	fi
+}
+
+echo "$repo_name: ready for agents"
+login=$(as_brad api user -q .login 2> /dev/null || true)
+if [ "$login" != "$owner" ]; then
+	echo "  gh's own login is '${login:-none}', not $owner. Log in again (CHECKLIST.md) and rerun." >&2
+	exit 1
+fi
+as_brad api "repos/$repo" > "$work/repo.json" || { echo "  can't read $repo as $owner" >&2; exit 1; }
+if [ "$(jq -r .permissions.admin "$work/repo.json")" = true ]; then ok "$owner is an admin of $repo"; else todo "$owner isn't an admin of $repo"; fi
+visibility=$(jq -r .visibility "$work/repo.json")
+if [ "$visibility" = public ]; then
+	ok "public"
+	[ "$public" = 1 ] || todo "the repository is public: set public=1 in repos/$repo_name.sh"
+else
+	todo "$visibility: rulesets need a public repository on Brad's plan"
+	[ "$public" = 0 ] || todo "the repository isn't public: set public=0 in repos/$repo_name.sh"
+fi
+if [ "$(jq -r .default_branch "$work/repo.json")" = main ]; then ok "default branch main"; else todo "the default branch isn't main"; fi
+
+raw() { as_brad api -H "Accept: application/vnd.github.raw+json" "repos/$repo/contents/$1" 2> /dev/null; }
+if agents_md=$(raw AGENTS.md); then
+	if grep -q '^## Mistakes agents have made' <<< "$agents_md"; then ok "AGENTS.md on main"
+	else todo "AGENTS.md has no \"## Mistakes agents have made\" section (templates/AGENTS.md)"; fi
+else
+	todo "no AGENTS.md on main (templates/AGENTS.md)"
+fi
+if [ "$(raw CLAUDE.md | tr -d '[:space:]')" = @AGENTS.md ]; then ok "CLAUDE.md is @AGENTS.md"
+else todo "CLAUDE.md on main should be just @AGENTS.md, with its rules moved into AGENTS.md"; fi
+
+# The ruleset requires CI's job by name and by the app that runs it, so a status from anywhere else can't stand in.
+read -r ci_conclusion integration < <(as_brad api "repos/$repo/commits/main/check-runs?check_name=$ci_job" \
+	-q '.check_runs[0] // {} | "\(.conclusion // "none") \(.app.id // 15368)"' || true)
+integration=${integration:-15368}
+case ${ci_conclusion:-none} in
+	success) ok "CI's $ci_job job passed on main" ;;
+	none) todo "no CI job named $ci_job has run on main (templates/ci-node-pnpm.yml)" ;;
+	*) todo "CI's $ci_job job on main: $ci_conclusion" ;;
+esac
+if [ "$(as_agent api user -q .login 2> /dev/null)" = "$agent" ]; then ok "the agent's token works as $agent"
+else todo "the token in $agent_token doesn't work as $agent"; fi
+
+if [ "$apply" = 1 ] && [ "$todos" -gt 0 ]; then
+	echo "$todos TODOs above (PLAYBOOK.md); changing nothing until they're done."
+	exit 1
+fi
+
+echo "$repo_name: GitHub"
+role=$(as_brad api "repos/$repo/collaborators/$agent/permission" -q .role_name)
+case $role in
+	write | maintain | admin) ok "$agent has $role" ;;
+	*)
+		if [ -z "$(as_brad api "repos/$repo/invitations" -q '.[] | select(.invitee.login == "'$agent'") | .id')" ]; then
+			change "invite $agent with write" as_brad api -X PUT "repos/$repo/collaborators/$agent" -f permission=push --silent
+		fi
+		accept() {
+			local id
+			id=$(as_agent api user/repository_invitations -q '.[] | select(.repository.full_name == "'$repo'") | .id')
+			[ -n "$id" ] || { echo "no invitation to $repo for $agent" >&2; exit 1; }
+			as_agent api -X PATCH "user/repository_invitations/$id" --silent
+		}
+		change "accept the invitation as $agent" accept
+		;;
+esac
+if [ "$(jq -r .delete_branch_on_merge "$work/repo.json")" = true ]; then ok "merged branches are deleted"
+else change "delete merged branches" as_brad api -X PATCH "repos/$repo" -F delete_branch_on_merge=true --silent; fi
+
+as_brad api --paginate "repos/$repo/labels" -q '.[] | "\(.name)|\(.color | ascii_upcase)|\(.description // "")"' > "$work/labels"
+missing=()
+for label in "${labels[@]}"; do grep -qxF "$label" "$work/labels" || missing+=("$label"); done
+if [ "${#missing[@]}" = 0 ]; then ok "labels: $(join_names "${labels[@]}")"; fi
+for label in "${missing[@]}"; do
+	IFS='|' read -r name color description <<< "$label"
+	change "label $name" as_brad label create "$name" -R "$repo" --color "$color" --description "$description" --force
+done
+
+ruleset_spec "$integration" > "$work/ruleset.json"
+normal() { jq -S '{name, target, enforcement, conditions, bypass_actors, rules: (.rules | sort_by(.type))}' "$@"; }
+id=$(as_brad api "repos/$repo/rulesets" -q '.[] | select(.name == "main") | .id')
+if [ -z "$id" ]; then
+	change "create the main ruleset" as_brad api -X POST "repos/$repo/rulesets" --input "$work/ruleset.json" --silent
+else
+	as_brad api "repos/$repo/rulesets/$id" | normal > "$work/ruleset.now"
+	if normal "$work/ruleset.json" | cmp -s - "$work/ruleset.now"; then
+		ok "the main ruleset (id $id) requires a PR, $ci_job and review"
+	else
+		normal "$work/ruleset.json" | diff "$work/ruleset.now" - | sed 's/^/         /' || true
+		change "update the main ruleset (id $id): < now, > tower's" as_brad api -X PUT "repos/$repo/rulesets/$id" --input "$work/ruleset.json" --silent
+	fi
+fi
+
+echo "$repo_name: the agents' clone, $clone"
+url=https://github.com/$repo.git
+helper='!f() { test "$1" = get || exit 0; t=$(cat '"$agent_token"' 2>/dev/null) || { echo "no agent token in ~/.config/gh-agents/token" >&2; exit 1; }; printf '"'"'username='"$agent"'\npassword=%s\n'"'"' "$t"; }; f'
+mkdir -p "$state"
+if [ ! -d "$clone/.git" ]; then
+	change "clone $repo" git clone -q "$url" "$clone"
+fi
+if [ -d "$clone/.git" ]; then
+	setting() { git -C "$clone" config --local --get "$1" || true; }
+	set_setting() { git -C "$clone" config --local "$1" "$2"; }
+	for pair in "user.name=$agent" "user.email=$agent_email" "push.autoSetupRemote=true"; do
+		if [ "$(setting "${pair%%=*}")" = "${pair#*=}" ]; then ok "${pair%%=*} $(setting "${pair%%=*}")"
+		else change "set ${pair%%=*} to ${pair#*=}" set_setting "${pair%%=*}" "${pair#*=}"; fi
+	done
+	if [ "$(git -C "$clone" remote get-url origin)" = "$url" ]; then ok "origin is $url"
+	else change "point origin at $url" git -C "$clone" remote set-url origin "$url"; fi
+	# An empty helper first, so no helper from Brad's global config runs; then one that only reads the agent's token.
+	key=credential.https://github.com.helper
+	set_helper() {
+		git -C "$clone" config --local --unset-all "$key" || true
+		git -C "$clone" config --local --add "$key" ""
+		git -C "$clone" config --local --add "$key" "$helper"
+	}
+	if [ "$(git -C "$clone" config --local --get-all "$key" || true)" = $'\n'"$helper" ]; then ok "the credential helper reads only the agent's token"
+	else change "set the credential helper to read only the agent's token" set_helper; fi
+	if cmp -s "$tower/lib/pre-push" "$clone/.git/hooks/pre-push"; then ok "the pre-push hook refuses main"
+	else change "install the pre-push hook" install -m 755 "$tower/lib/pre-push" "$clone/.git/hooks/pre-push"; fi
+else
+	echo "  would  set its identity, credential helper and pre-push hook"
+fi
+
+echo "$repo_name: the check in the sandbox"
+if [ "$apply" = 0 ]; then
+	echo "  skip   runs with --apply: ${setup[*]}, then $check, on main"
+else
+	sandbox_args=()
+	for path in "${sandbox_ro[@]}"; do sandbox_args+=(--ro-bind "$path" "$path"); done
+	exec 9> "$state/lock"
+	flock -n 9 || { echo "  a novice run is using the clone; run this again after it" >&2; exit 1; }
+	git -C "$clone" fetch -q --prune origin
+	git -C "$clone" reset -q --hard && git -C "$clone" clean -qfd
+	git -C "$clone" checkout -q --detach origin/main
+	if ! "$tower/bin/sandbox" "$clone" "${sandbox_args[@]}" -- "${setup[@]}" > "$work/setup.log" 2>&1; then
+		tail -5 "$work/setup.log" | sed 's/^/         /'
+		todo "${setup[*]} fails in the sandbox"
+	elif ! "$tower/bin/sandbox" "$clone" "${sandbox_args[@]}" -- bash -c "$check" > "$work/check.log" 2>&1; then
+		tail -15 "$work/check.log" | sed 's/^/         /'
+		todo "$check fails in the sandbox; add what it needs to sandbox_ro, or fix the repository"
+	elif grep -Eq '(# |ℹ )skipped [1-9]' "$work/check.log"; then
+		todo "$check passes in the sandbox but skips tests: $(grep -E '(# |ℹ )skipped' "$work/check.log" | head -1)"
+	else
+		ok "$check passes in the sandbox at $(git -C "$clone" rev-parse --short HEAD)"
+	fi
+fi
+
+echo
+if [ "$todos" -gt 0 ]; then
+	echo "$todos TODOs (PLAYBOOK.md)."
+	exit 1
+elif [ "$apply" = 0 ] && [ "$changes" -gt 0 ]; then
+	echo "$changes change$([ "$changes" = 1 ] || echo s); run with --apply to make it so."
+else
+	echo "$repo_name is set up. Next: its first issues (PLAYBOOK.md, step 7), then bin/novice $repo_name --dry-run."
+fi

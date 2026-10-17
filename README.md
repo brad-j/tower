@@ -2,8 +2,11 @@
 
 Runs coding agents on Brad's repositories through small GitHub issues, branches and PRs, with tests as the merge gate and an adversarial reviewer that shares no memory with the worker. Each repository gets a settings file; the scripts don't name any one of them.
 
+To add a repository, follow `PLAYBOOK.md`. What only Brad does is in `CHECKLIST.md`.
+
 ## Commands
 
+- `bin/tower add-repo NAME [--apply]`: checks that a repository is ready and sets up its GitHub settings, labels, ruleset, the agents' clone and the check in the sandbox. Without `--apply` it changes nothing.
 - `bin/novice REPO [--dry-run]`: the loop. Starts the oldest untried `agent` issue or revises the open agent PR, and stops when it's Brad's turn.
 - `bin/review-pr REPO PR [--dry-run]` or `bin/review-pr REPO --head REF --issue N`: the reviewer. Sees only the issue, the PR description and the diff.
 - `bin/sandbox DIR [BWRAP_OPTION...] -- COMMAND...`: the bubblewrap sandbox the worker runs in.
@@ -20,6 +23,8 @@ What they leave on a PR:
 ## Layout
 
 - `repos/NAME.sh`: per-repo settings (GitHub repo, clone, state dir, setup and check commands, worker tools, sandbox paths, flagged files, safety code, docs, uncounted files, public or not). `lib/tower.sh` loads them, says which ones are missing, and holds the checks both scripts share.
+- `lib/tower.sh`: the accounts, labels, size limit and ruleset shared by the scripts. `lib/pre-push`: the hook installed in each clone.
+- `templates/`: AGENTS.md and CI to start a new repository from.
 - `log.md`: one line per worker run, with what Brad did and any problem found after merge.
 - `~/novices/`, outside this repo: the agents' clones (`~/novices/gaidin`), loop state (`~/novices/state/NAME/`) and issue drafts.
 
