@@ -10,6 +10,7 @@ To set tower up on a machine, follow `SETUP.md`. To add a repository, follow `PL
 - `bin/novice REPO [--dry-run]`: the loop. Starts the oldest untried `agent` issue or revises the open agent PR, and stops when it's Brad's turn.
 - `bin/review-pr REPO PR [--dry-run]` or `bin/review-pr REPO --head REF --issue N`: the reviewer. Sees only the issue, the PR description and the diff.
 - `bin/sandbox DIR [BWRAP_OPTION...] -- COMMAND...`: the bubblewrap sandbox the worker runs in.
+- `systemd/tower@.timer`: runs `bin/novice NAME` every 15 minutes for each repository whose timer is enabled (SETUP.md, step 9).
 
 `REPO` is a file name in `repos/` without `.sh`.
 

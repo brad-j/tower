@@ -103,9 +103,22 @@ bin/tower add-repo gaidin --apply    # also runs the check in the sandbox
 bin/novice gaidin --dry-run          # says what the loop would do next
 ```
 
+## 9. The timer
+
+A systemd user timer runs `bin/novice NAME` for each repository every 15 minutes, so the loop picks up after Brad approves, merges or requests changes. The units are in `systemd/`; `tower@.service` names tower's path, so update it if tower moves.
+
+```fish
+systemctl --user link ~/westwood/Projects/Software/tower/systemd/tower@.service ~/westwood/Projects/Software/tower/systemd/tower@.timer
+systemctl --user enable --now tower@gaidin.timer tower@moiraine.timer
+loginctl enable-linger $USER    # keeps them running while logged out; already on for egwene
+```
+
 ## Running
 
-- `bin/novice NAME` by hand, after each thing Brad does on a PR. There's no timer yet. While one run is going, another on the same repository exits at once (the lock is `~/novices/state/NAME/lock`).
+- The timers start `bin/novice NAME` every 15 minutes. Running it by hand still works: while one run is going, another on the same repository exits at once (the lock is `~/novices/state/NAME/lock`), and a run that's still going isn't started again.
+- What it did: `journalctl --user -u tower@NAME -e`. When it's next due: `systemctl --user list-timers 'tower@*'`.
+- Pause a repository: `systemctl --user stop tower@NAME.timer` (until the next login or reboot) or `disable --now` (until it's enabled again).
+- A new repository's timer: `systemctl --user enable --now tower@NAME.timer`, after its first run by hand.
 - Limits, in `bin/novice` and `bin/review-pr`: 10 worker runs a day per repository, Sonnet 5.5 at medium effort, $3 and 30 minutes per worker run, $0.75 and 10 minutes per review, one agent PR open at a time, diffs up to 300 lines.
 
 ## Where things are kept

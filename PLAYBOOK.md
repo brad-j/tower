@@ -55,11 +55,11 @@ Write drafts in `~/novices/issues.md`, read them with Brad, and post the ones he
 
 ### 8. First run (tower)
 
-`bin/novice NAME --dry-run`, then `bin/novice NAME`. Watch the first PR through: summary comment, labels, review status, merge.
+`bin/novice NAME --dry-run`, then `bin/novice NAME`. Watch the first PR through: summary comment, labels, review status, merge. Then turn on its timer: `systemctl --user enable --now tower@NAME.timer`.
 
 ## Running the loop
 
-- `bin/novice NAME` steps until it's Brad's turn. Run it again after he approves, merges or requests changes.
+- `bin/novice NAME` steps until it's Brad's turn. Its timer runs it every 15 minutes; `journalctl --user -u tower@NAME` shows what it did.
 - An issue the agent didn't finish, or one that came out over 300 lines, is marked tried. Fix or split the issue, then remove `~/novices/state/NAME/issue-N` to let it run again.
 - A failed CI run is rerun once before the agent revises. A test that passes on the rerun is named as flaky in the summary comment and log.md's CI column; a flaky test is a bug to fix with its own issue, not something to rerun forever.
 - A PR merged or closed before the loop came back to it still gets its log line on the next run.

@@ -8,7 +8,7 @@ What only Brad does. Everything else is tower's job.
 - If it has `needs-brad`, read the parts it names: flagged files, safety code, docs, or the done conditions the reviewer couldn't verify.
 - Approve and merge, or choose "Request changes" with what to fix. The agent gets two revisions for you per PR.
 - Don't bypass a pending or failed `review` check unless you mean to.
-- Run `bin/novice NAME` again.
+- The timer runs `bin/novice NAME` within 15 minutes. Run it by hand to go sooner.
 
 ## After merging
 
@@ -25,6 +25,7 @@ What only Brad does. Everything else is tower's job.
 
 - Read `log.md`. A repository with about 10 clean merges can be vouched for: set `vouched=1` in `repos/NAME.sh`.
 - Approve each new repository's GitHub setup when `tower add-repo` shows its plan.
+- To stop the agents on a repository: `systemctl --user disable --now tower@NAME.timer`.
 
 ## Logins and tokens
 

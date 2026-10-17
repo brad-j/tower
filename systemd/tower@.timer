@@ -1,0 +1,12 @@
+[Unit]
+Description=tower: run the agent loop on %i every 15 minutes
+
+[Timer]
+# A run that's still going (waiting on CI, or a worker) isn't started again; one Brad starts by hand takes the lock and
+# this one exits.
+OnCalendar=*:0/15
+RandomizedDelaySec=1m
+Unit=tower@%i.service
+
+[Install]
+WantedBy=timers.target

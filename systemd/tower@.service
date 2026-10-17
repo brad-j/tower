@@ -1,0 +1,12 @@
+[Unit]
+Description=tower: the agent loop on %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The host tools novice and review-pr use: git, gh, jq, flock and bwrap in /usr/bin, and the reviewer's claude in
+# ~/.local/bin. The worker's Node and Claude Code come from pi-node inside the sandbox.
+Environment=PATH=%h/.local/bin:/usr/bin
+ExecStart=%h/westwood/Projects/Software/tower/bin/novice %i
+Nice=10
