@@ -126,7 +126,8 @@ failed_tests() {
 # The tests that failed on SHA's first CI run and passed on its rerun, comma-separated; nothing if it didn't happen.
 flaky_tests() {
 	[ -f "$state/rerun-$1" ] && [ "${2%% *}" = success ] || return 0
-	if [ -s "$state/rerun-$1" ]; then paste -sd, "$state/rerun-$1" | sed 's/,/, /g'; else echo "a step, not a named test"; fi
+	# Semicolons between tests, since Playwright's test names can hold commas.
+	if [ -s "$state/rerun-$1" ]; then paste -sd';' "$state/rerun-$1" | sed 's/;/; /g'; else echo "a step, not a named test"; fi
 }
 
 # Moves the log line saved for SHA into log.md, with its CI result $2 and review verdict $3.
