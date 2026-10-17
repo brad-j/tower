@@ -13,3 +13,4 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-17 | gaidin | #4 A "Try it locally" section in the README | #9 | sonnet-5.5 medium | 11 | $0.12 | success | block | merged before the review finished | README on main: the clone line fails if pasted, and it doesn't say each ask appends to slept.log. Follow-up fix: #10 (#4 reopened for it). |
 | 2026-10-17 | gaidin | #4 follow-up to #9 (the revision made for #9, pushed after its merge) | #10 | sonnet-5.5 medium | 10 | $0.09 | success | block | | |
 | 2026-10-17 | gaidin | #4 revision (auto) | #10 | sonnet-5.5 medium | 4 | $0.08 | success | pass | | |
+| 2026-10-17 | moiraine | #2 Service worker can keep a shell whose build files it doesn't have, so the app opens blank offline | #10 | sonnet-5.5 medium | 8 | $0.15 | success | pass | | |
