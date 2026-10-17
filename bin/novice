@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# The agent loop on one repository. Each step either starts the oldest open issue labeled agent or revises the open
+# agent PR, and the script keeps stepping until it's Brad's turn: a PR waiting for his review, the day's runs used up,
+# or nothing to do. Run it again, by hand or from a timer, after Brad acts.
+#
+#   novice REPO [--dry-run]     REPO names a settings file in repos/; --dry-run says what the next step would be and stops
+#
+# Limits: one agent PR open at a time; RUNS_PER_DAY worker runs a day; on each PR one automatic revision (a failed CI
+# run or a blocking review) and up to BRAD_REVISIONS more, each started by Brad choosing "Request changes" on the PR.
+# The worker runs in bin/sandbox with its own Claude token; this script pushes and talks to GitHub as brads-agents.
+set -euo pipefail
+
+. "$(dirname "$(realpath "$0")")/../lib/settings.sh"
+load_settings "${1:-}"
+shift
+repo_dir=$clone
+bin=$tower/bin
+log=$tower/log.md
+owner=brad-j
+agent=brads-agents
+model=claude-sonnet-5-5
+budget=3
+RUNS_PER_DAY=10
+BRAD_REVISIONS=2
+denied=("Bash(git push*)" "Bash(gh *)" "Bash(git remote*)" "Bash(git config*)" "Bash(curl *)")
+
+dry_run=0
+[ "${1:-}" = --dry-run ] && dry_run=1
+say() { echo "$(date +%H:%M:%S) $*"; }
+sandbox_args=()
+for path in "${sandbox_ro[@]}"; do sandbox_args+=(--ro-bind "$path" "$path"); done
+
+mkdir -p "$state"
+exec 9> "$state/lock"
+flock -n 9 || { say "another novice run is going"; exit 0; }
+GH_TOKEN=$(cat "$HOME/.config/gh-agents/token")
+export GH_TOKEN
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$repo_dir"
+
+runs_today() { cat "$state/runs-$(date +%F)" 2>/dev/null | wc -l; }
+count() { cat "$state/$1" 2>/dev/null || echo 0; }
+bump() { echo $(($(count "$1") + 1)) > "$state/$1"; }
+
+# A clean checkout of BRANCH at START, with dependencies installed inside the sandbox, since package.json may be the agent's.
+checkout() {
+	git fetch -q --prune origin
+	git reset -q --hard && git clean -qfd
+	git checkout -q -B "$1" "$2"
+	"$bin/sandbox" "$repo_dir" "${sandbox_args[@]}" -- "${setup[@]}" > "$work/install.log" 2>&1 || { say "${setup[*]} failed:"; tail -5 "$work/install.log"; exit 1; }
+}
+
+# Runs the worker on the prompt in $1, leaving Claude's JSON in $work/worker.json.
+worker() {
+	local claude_token
+	claude_token=$(cat "$HOME/.config/novices/claude-token") || { say "no Claude token in ~/.config/novices/claude-token (claude setup-token)"; exit 1; }
+	date +%T >> "$state/runs-$(date +%F)"
+	CLAUDE_CODE_OAUTH_TOKEN=$claude_token timeout 1800 "$bin/sandbox" "$repo_dir" "${sandbox_args[@]}" -- \
+		claude -p --model "$model" --effort medium --max-budget-usd "$budget" --output-format json \
+		--strict-mcp-config --setting-sources project --no-session-persistence \
+		--allowedTools "${allowed[@]}" --disallowedTools "${denied[@]}" < "$1" > "$work/worker.json" 2> "$work/worker.err" || true
+	jq -e . "$work/worker.json" > /dev/null 2>&1 || echo '{"subtype":"crashed","num_turns":0,"total_cost_usd":0,"result":"The worker crashed or timed out."}' > "$work/worker.json"
+	git reset -q --hard && git clean -qfd
+	# A run that never got to work (a login or API error, a crash, the timeout) says nothing about the issue: stop here,
+	# leaving the issue untried and the PR as it was.
+	if jq -e '.subtype == "crashed" or (.subtype == "success" and .is_error == true)' "$work/worker.json" > /dev/null; then
+		say "the worker failed before doing any work: $(result | head -c 300)"
+		exit 1
+	fi
+	say "worker: $(jq -r '"\(.subtype), \(.num_turns) turns, est. $\(.total_cost_usd * 100 | round / 100)"' "$work/worker.json")"
+}
+result() { jq -r '.result // ""' "$work/worker.json"; }
+
+# Saves what the log line for HEAD needs until its CI and review are known.
+pending() { jq -n --arg what "$2" --arg pr "$3" '{what: $what, pr: $pr}' | jq -c --slurpfile w "$work/worker.json" \
+	'. + {turns: $w[0].num_turns, cost: ($w[0].total_cost_usd * 100 | round / 100)}' > "$state/pending-$1"; }
+
+checks_permitted() {
+	[ "$(runs_today)" -lt "$RUNS_PER_DAY" ] && return 0
+	say "$RUNS_PER_DAY worker runs used today; stopping until tomorrow"
+	return 1
+}
+
+# Waits for the CI run on SHA and prints success or failure.
+ci_result() {
+	local id="" i
+	for i in $(seq 40); do
+		id=$(gh run list -R "$repo" --commit "$1" --workflow ci.yml --limit 1 --json databaseId -q '.[0].databaseId // empty')
+		[ -n "$id" ] && break
+		sleep 15
+	done
+	[ -n "$id" ] || { echo missing; return; }
+	timeout 1500 gh run watch -R "$repo" "$id" --exit-status --interval 30 > /dev/null 2>&1 && echo success || echo "failure $id"
+}
+
+# The reviewer's verdict on SHA, from its marker in the PR's comments; runs the reviewer if there's none yet.
+review_verdict() {
+	local verdict
+	verdict=$(gh pr view -R "$repo" "$1" --json comments -q '[.comments[] | select(.author.login == "'$agent'") | .body
+		| capture("<!-- review-pr verdict=(?<v>[a-z]+) head=(?<h>[0-9a-f]+) -->") | select(.h == "'$2'") | .v] | last // empty')
+	if [ -z "$verdict" ]; then
+		[ "$dry_run" = 1 ] && { echo "not reviewed yet"; return; }
+		"$bin/review-pr" "$repo_name" "$1" >&2 || true
+		verdict=$(gh pr view -R "$repo" "$1" --json comments -q '[.comments[] | select(.author.login == "'$agent'") | .body
+			| capture("<!-- review-pr verdict=(?<v>[a-z]+) head=(?<h>[0-9a-f]+) -->") | select(.h == "'$2'") | .v] | last // "failed"')
+	fi
+	echo "$verdict"
+}
+
+pr_state() { gh pr view -R "$repo" "$1" --json state -q .state; }
+
+# One step on the open PR. Returns 0 if it pushed a revision (step again), 1 if it's Brad's turn.
+step_pr() {
+	local pr=$1 branch=$2 head=$3 issue ci verdict review_id feedback="" kind=""
+	issue=$(gh pr view -R "$repo" "$pr" --json closingIssuesReferences -q '.closingIssuesReferences[0].number')
+	say "PR #$pr (issue #$issue) at ${head:0:7}"
+	ci=$(ci_result "$head"); say "CI: $ci"
+	verdict=$(review_verdict "$pr" "$head"); say "review: $verdict"
+
+	if [ "$dry_run" = 0 ] && [ -f "$state/pending-$head" ]; then
+		jq -r --arg date "$(date +%F)" --arg ci "${ci%% *}" --arg review "$verdict" \
+			--arg name "$repo_name" '"| \($date) | \($name) | \(.what) | #\(.pr) | sonnet-5.5 medium | \(.turns) | $\(.cost) | \($ci) | \($review) | |"' \
+			"$state/pending-$head" >> "$log"
+		rm "$state/pending-$head"
+	fi
+
+	# Brad can merge or close it while CI or the reviewer runs.
+	if [ "$(pr_state "$pr")" != OPEN ]; then say "PR #$pr is $(pr_state "$pr") now; moving on"; return 0; fi
+	if [ "$ci" = missing ]; then say "no CI run appeared for ${head:0:7}; over to Brad"; return 1; fi
+
+	# Brad's "Request changes" since the last one handled comes first.
+	review_id=$(gh api "repos/$repo/pulls/$pr/reviews" -q '[.[] | select(.user.login == "'$owner'" and .state == "CHANGES_REQUESTED")] | last | .id // empty')
+	if [ -n "$review_id" ] && [ "$review_id" != "$(cat "$state/pr-$pr.brad-handled" 2>/dev/null)" ]; then
+		if [ "$(count "pr-$pr.brad-revisions")" -ge "$BRAD_REVISIONS" ]; then
+			say "Brad asked for changes, but this PR has had its $BRAD_REVISIONS revisions for him; over to Brad"; return 1
+		fi
+		kind=brad
+		feedback="## Brad's review (he requested changes)
+$(gh api "repos/$repo/pulls/$pr/reviews/$review_id" -q .body)
+$(gh api "repos/$repo/pulls/$pr/reviews/$review_id/comments" -q '.[] | "\n- \(.path) line \(.line // .original_line): \(.body)"')"
+	elif [ "$ci" != success ] || [ "$verdict" = block ]; then
+		if [ "$(count "pr-$pr.auto-revisions")" -ge 1 ]; then
+			say "still CI $ci, review $verdict after the automatic revision; over to Brad"; return 1
+		fi
+		kind=auto
+		if [ "${ci%% *}" = failure ]; then
+			feedback="## CI failed
+~~~
+$(gh run view -R "$repo" "${ci#failure }" --log-failed 2>/dev/null | cut -f3- | tail -120 | cut -c1-300)
+~~~"
+		fi
+		if [ "$verdict" = block ]; then
+			feedback="$feedback
+
+## An automated reviewer blocked it
+It saw only the issue, the diff and the description, and it can be wrong. Act on findings you can confirm, and say why for any you don't.
+
+$(gh pr view -R "$repo" "$pr" --json comments -q '[.comments[] | select(.author.login == "'$agent'") | select(.body | contains("head='$head'"))] | last | .body')"
+		fi
+	else
+		say "CI passed and the review didn't block; waiting for Brad to approve and merge, or request changes"; return 1
+	fi
+
+	[ "$dry_run" = 1 ] && { say "would revise PR #$pr ($kind)"; return 1; }
+	checks_permitted || return 1
+	say "revising PR #$pr ($kind)"
+	checkout "$branch" "origin/$branch"
+	{
+		echo "You're working on $repo_name in this checkout, on the branch $branch, which is pull request #$pr for the issue below. It needs a revision."
+		echo
+		echo "Read AGENTS.md first and follow it. Address the feedback below and nothing else. Run $check until it passes, then add new commits on this branch; don't amend or rebase. You can't push or use gh; that's done for you."
+		echo
+		echo "Your final answer is posted on the pull request: for each point, what you changed, or why you didn't."
+		echo
+		gh issue view -R "$repo" "$issue" --json title,body -q '"# Issue #'"$issue"': " + .title + "\n\n" + .body'
+		echo
+		echo "# Feedback"
+		echo
+		echo "$feedback"
+	} > "$work/prompt.md"
+	worker "$work/prompt.md"
+	if [ "$kind" = brad ]; then bump "pr-$pr.brad-revisions"; echo "$review_id" > "$state/pr-$pr.brad-handled"; else bump "pr-$pr.auto-revisions"; fi
+	gh pr comment -R "$repo" "$pr" --body "**Revision ($( [ "$kind" = brad ] && echo "for Brad's review" || echo "automatic: CI $ci, review $verdict"))**
+
+$(result)" > /dev/null
+	if [ "$(git rev-parse HEAD)" = "$head" ]; then say "the worker added no commits"; return 1; fi
+	if [ "$(pr_state "$pr")" != OPEN ]; then
+		say "PR #$pr was $(pr_state "$pr" | tr A-Z a-z) while the worker ran; its revision $(git rev-parse --short HEAD) stays local on $branch, not pushed"
+		return 1
+	fi
+	pending "$(git rev-parse HEAD)" "#$issue revision ($kind)" "$pr"
+	git push -q origin "HEAD:refs/heads/$branch" 2> /dev/null
+	return 0
+}
+
+# Starts the oldest open agent issue that hasn't been tried. Returns 0 if it opened a PR, 1 otherwise.
+start_issue() {
+	local issue title branch pr touchy
+	issue=""
+	for n in $(gh issue list -R "$repo" --label agent --state open --json number -q 'sort_by(.number) | .[].number'); do
+		if [ -f "$state/issue-$n" ]; then say "skipping #$n, tried before: $(cat "$state/issue-$n") (remove $state/issue-$n to retry)"; continue; fi
+		issue=$n; break
+	done
+	[ -n "$issue" ] || { say "no open agent issues left to start"; return 1; }
+	title=$(gh issue view -R "$repo" "$issue" --json title -q .title)
+	[ "$dry_run" = 1 ] && { say "would start #$issue: $title"; return 1; }
+	checks_permitted || return 1
+	branch=agent/issue-$issue
+	say "starting #$issue: $title"
+	checkout "$branch" origin/main
+	{
+		echo "You're working on $repo_name in this checkout, on the branch $branch, to resolve the GitHub issue below."
+		echo
+		echo "Read AGENTS.md first and follow it. Make the change the issue asks for and nothing else. Run $check until it passes. Then commit on this branch, with a commit message in prose as AGENTS.md says. You can't push or use gh; that's done for you after you finish."
+		echo
+		echo "Your final answer becomes the pull request's description. Write it as AGENTS.md says: what changed, how you checked it, and anything you weren't sure of. Don't add a Closes line; that's added for you. If you couldn't finish, say what stopped you and don't commit."
+		echo
+		gh issue view -R "$repo" "$issue" --json title,body -q '"# Issue #'"$issue"': " + .title + "\n\n" + .body'
+	} > "$work/prompt.md"
+	worker "$work/prompt.md"
+	if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]; then
+		gh issue comment -R "$repo" "$issue" --body "**The agent didn't finish this, so there's no PR.**
+
+$(result)" > /dev/null
+		echo "no PR, $(date +%F)" > "$state/issue-$issue"
+		jq -r --arg date "$(date +%F)" --arg what "#$issue $title" --arg name "$repo_name" \
+			'"| \($date) | \($name) | \($what) | none | sonnet-5.5 medium | \(.num_turns) | $\(.total_cost_usd * 100 | round / 100) | | | |"' "$work/worker.json" >> "$log"
+		say "no commits; commented on #$issue"
+		return 1
+	fi
+	touchy=$(git diff --name-only origin/main...HEAD | grep -E "$flagged" || true)
+	{
+		echo "Closes #$issue"
+		echo
+		[ -n "$touchy" ] && printf '> [!WARNING]\n> This PR changes files that steer CI, agents or dependencies: %s\n\n' "$(echo $touchy | sed 's/ /, /g')"
+		result
+	} > "$work/body.md"
+	git push -q -u origin "$branch" 2> /dev/null
+	pr=$(gh pr create -R "$repo" --head "$branch" --base main --title "$title" --body-file "$work/body.md" | grep -oE '[0-9]+$')
+	echo "PR #$pr, $(date +%F)" > "$state/issue-$issue"
+	pending "$(git rev-parse HEAD)" "#$issue $title" "$pr"
+	say "opened PR #$pr"
+	opened="$pr $branch $(git rev-parse HEAD)"
+	return 0
+}
+
+while true; do
+	# Not --author, which goes through GitHub's search index and can miss a PR opened seconds ago.
+	open=$(gh pr list -R "$repo" --state open --json number,headRefName,headRefOid,author -q '.[] | select(.author.login == "'$agent'") | "\(.number) \(.headRefName) \(.headRefOid)"')
+	if [ "$(printf '%s' "$open" | grep -c .)" -gt 1 ]; then say "more than one agent PR is open; leaving it to Brad"; break; fi
+	[ -n "${opened:-}" ] && { open=$opened; opened=""; }
+	if [ -n "$open" ]; then
+		# shellcheck disable=SC2086
+		step_pr $open || break
+	else
+		start_issue || break
+	fi
+done

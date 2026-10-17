@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Runs a command in bubblewrap for an agent: the network, the system, Node and Claude Code read-only, and one checkout
+# writable. Home is an empty tmpfs, so ~/.ssh, ~/.config (gh and the agent's GitHub token), ~/.claude, the keyring's
+# socket and every other project aren't there. The checkout's .git/config and .git/hooks are read-only, since git runs
+# them outside the sandbox later.
+#
+#   sandbox DIR [BWRAP_OPTION...] -- COMMAND...
+#
+# bin/novice passes a --ro-bind for each of the repo's sandbox_ro paths (pnpm's store and Playwright's browsers for
+# gaidin). By hand, in bash:
+#   s=$HOME/.local/share/pnpm/store p=$HOME/.cache/ms-playwright; sandbox ~/novices/gaidin --ro-bind $s $s --ro-bind $p $p -- pnpm check
+#
+# Only HOME, PATH, LANG and CLAUDE_CODE_OAUTH_TOKEN (if set) reach the command. The token stays in the environment,
+# never on bwrap's command line, where any process could read it.
+set -euo pipefail
+
+dir=$(realpath "$1"); shift
+extra=()
+while [ $# -gt 0 ] && [ "$1" != -- ]; do extra+=("$1"); shift; done
+[ "${1:-}" = -- ] || { echo "usage: sandbox DIR [BWRAP_OPTION...] -- COMMAND..." >&2; exit 1; }
+shift
+
+node_home=$HOME/.local/share/pi-node
+env=(--setenv HOME "$HOME" --setenv PATH "$node_home/current/bin:/usr/bin" --setenv LANG "${LANG:-C.UTF-8}")
+for name in $(compgen -e); do
+	case $name in HOME | PATH | LANG | CLAUDE_CODE_OAUTH_TOKEN) ;; *) env+=(--unsetenv "$name") ;; esac
+done
+
+exec bwrap --die-with-parent --new-session --unshare-all --share-net "${env[@]}" \
+	--ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 --symlink usr/bin /sbin \
+	--ro-bind /etc /etc --ro-bind /run/systemd/resolve /run/systemd/resolve \
+	--proc /proc --dev /dev --tmpfs /tmp \
+	--tmpfs "$HOME" \
+	--ro-bind "$node_home" "$node_home" \
+	--bind "$dir" "$dir" \
+	--ro-bind "$dir/.git/config" "$dir/.git/config" \
+	--ro-bind "$dir/.git/hooks" "$dir/.git/hooks" \
+	--chdir "$dir" \
+	"${extra[@]}" -- "$@"
