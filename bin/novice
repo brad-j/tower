@@ -7,10 +7,12 @@
 #
 # Limits: one agent PR open at a time; RUNS_PER_DAY worker runs a day; on each PR one automatic revision (a failed CI
 # run or a blocking review) and up to BRAD_REVISIONS more, each started by Brad choosing "Request changes" on the PR.
+# A change over max_lines (lib/tower.sh) isn't opened or pushed; the issue needs splitting. When it's Brad's turn on a
+# PR, the loop leaves a one-line summary and labels it needs-brad if he has to read it closely.
 # The worker runs in bin/sandbox with its own Claude token; this script pushes and talks to GitHub as brads-agents.
 set -euo pipefail
 
-. "$(dirname "$(realpath "$0")")/../lib/settings.sh"
+. "$(dirname "$(realpath "$0")")/../lib/tower.sh"
 load_settings "${1:-}"
 shift
 repo_dir=$clone
@@ -27,6 +29,8 @@ denied=("Bash(git push*)" "Bash(gh *)" "Bash(git remote*)" "Bash(git config*)" "
 dry_run=0
 [ "${1:-}" = --dry-run ] && dry_run=1
 say() { echo "$(date +%H:%M:%S) $*"; }
+# Prints the arguments after SEP, separated by it.
+join() { local sep=$1 out=$2 item; shift 2; for item in "$@"; do out+="$sep$item"; done; printf '%s' "$out"; }
 sandbox_args=()
 for path in "${sandbox_ro[@]}"; do sandbox_args+=(--ro-bind "$path" "$path"); done
 
@@ -108,19 +112,67 @@ review_verdict() {
 	echo "$verdict"
 }
 
+# The reviewer's latest comment on PR $1 for head $2.
+review_comment() { gh pr view -R "$repo" "$1" --json comments -q '[.comments[] | select(.author.login == "'$agent'") | select(.body | contains("head='"$2"'"))] | last | .body // ""'; }
+
 pr_state() { gh pr view -R "$repo" "$1" --json state -q .state; }
+
+# Ends the loop's turn on PR $1 at head $2 (CI $3, review $4): a one-line summary comment, once for each head and outcome,
+# and the needs-brad label when it touches flagged files or safety code, changes files a test can't prove (docs), or the
+# reviewer listed done conditions it couldn't verify. A head without those loses the label.
+summarize() {
+	local pr=$1 head=$2 ci=$3 verdict=$4 marker files lines flagged_list unprovable_list unverified parts=() reasons=()
+	marker="<!-- tower summary head=$head ci=${ci%% *} review=$verdict -->"
+	if gh pr view -R "$repo" "$pr" --json comments -q '.comments[] | select(.author.login == "'$agent'") | .body' | grep -qF "$marker"; then
+		return 0
+	fi
+	git fetch -q origin main "pull/$pr/head"
+	files=$(git diff --name-only "origin/main...$head")
+	lines=$(diff_lines "$head")
+	flagged_list=$(flagged_files <<< "$files" | paste -sd, | sed 's/,/, /g')
+	unprovable_list=$(grep -E "$unprovable" <<< "$files" | grep -vxF -f <(flagged_files <<< "$files") | paste -sd, | sed 's/,/, /g' || true)
+	# How many done conditions the reviewer listed as unverified: its list items, or 1 for a line of prose.
+	unverified=$(review_comment "$pr" "$head" | awk '/^## Unverified/ { on = 1; next } /^(---|## )/ { on = 0 } on' | sed '/^[[:space:]]*$/d')
+	if [ -z "$unverified" ] || [ "$unverified" = None. ]; then unverified=0
+	else
+		unverified=$(grep -cE '^[[:space:]]*([-*]|[0-9]+\.) ' <<< "$unverified" || true)
+		[ "$unverified" -gt 0 ] || unverified=1
+	fi
+
+	case ${ci%% *} in success) parts+=("CI passed") ;; *) parts+=("CI failed") ;; esac
+	case $verdict in pass) parts+=("review passed") ;; block) parts+=("review blocked") ;; *) parts+=("review didn't run") ;; esac
+	parts+=("$lines lines")
+	if [ -n "$flagged_list" ]; then parts+=("flagged: $flagged_list"); reasons+=("flagged files"); else parts+=("no flagged files"); fi
+	if [ -n "$unprovable_list" ]; then parts+=("tests can't prove: $unprovable_list"); reasons+=("docs"); fi
+	if [ "$unverified" -gt 0 ]; then parts+=("Unverified: $unverified (see the review)"); reasons+=("unverified done conditions"); else parts+=("Unverified: none"); fi
+
+	local body
+	body=$(join " · " "${parts[@]}")
+	if [ "${#reasons[@]}" -gt 0 ]; then
+		gh api -X POST "repos/$repo/issues/$pr/labels" -f 'labels[]=needs-brad' > /dev/null
+		body="$body
+
+Labeled needs-brad ($(join ", " "${reasons[@]}")): read those parts before approving."
+	else
+		gh api -X DELETE "repos/$repo/issues/$pr/labels/needs-brad" > /dev/null 2>&1 || true
+	fi
+	gh pr comment -R "$repo" "$pr" --body "$body
+$marker" > /dev/null
+	say "summary: $(head -1 <<< "$body")"
+}
 
 # One step on the open PR. Returns 0 if it pushed a revision (step again), 1 if it's Brad's turn.
 step_pr() {
 	local pr=$1 branch=$2 head=$3 issue ci verdict review_id feedback="" kind=""
-	issue=$(gh pr view -R "$repo" "$pr" --json closingIssuesReferences -q '.closingIssuesReferences[0].number')
+	issue=$(gh pr view -R "$repo" "$pr" --json closingIssuesReferences -q '.closingIssuesReferences[0].number // empty')
+	[ -n "$issue" ] || { say "PR #$pr doesn't close an issue, so it can't be reviewed or revised; over to Brad"; return 1; }
 	say "PR #$pr (issue #$issue) at ${head:0:7}"
 	ci=$(ci_result "$head"); say "CI: $ci"
 	verdict=$(review_verdict "$pr" "$head"); say "review: $verdict"
 
 	if [ "$dry_run" = 0 ] && [ -f "$state/pending-$head" ]; then
 		jq -r --arg date "$(date +%F)" --arg ci "${ci%% *}" --arg review "$verdict" \
-			--arg name "$repo_name" '"| \($date) | \($name) | \(.what) | #\(.pr) | sonnet-5.5 medium | \(.turns) | $\(.cost) | \($ci) | \($review) | |"' \
+			--arg name "$repo_name" '"| \($date) | \($name) | \(.what) | #\(.pr) | sonnet-5.5 medium | \(.turns) | $\(.cost) | \($ci) | \($review) | | |"' \
 			"$state/pending-$head" >> "$log"
 		rm "$state/pending-$head"
 	fi
@@ -133,6 +185,7 @@ step_pr() {
 	review_id=$(gh api "repos/$repo/pulls/$pr/reviews" -q '[.[] | select(.user.login == "'$owner'" and .state == "CHANGES_REQUESTED")] | last | .id // empty')
 	if [ -n "$review_id" ] && [ "$review_id" != "$(cat "$state/pr-$pr.brad-handled" 2>/dev/null)" ]; then
 		if [ "$(count "pr-$pr.brad-revisions")" -ge "$BRAD_REVISIONS" ]; then
+			[ "$dry_run" = 1 ] || summarize "$pr" "$head" "$ci" "$verdict"
 			say "Brad asked for changes, but this PR has had its $BRAD_REVISIONS revisions for him; over to Brad"; return 1
 		fi
 		kind=brad
@@ -141,6 +194,7 @@ $(gh api "repos/$repo/pulls/$pr/reviews/$review_id" -q .body)
 $(gh api "repos/$repo/pulls/$pr/reviews/$review_id/comments" -q '.[] | "\n- \(.path) line \(.line // .original_line): \(.body)"')"
 	elif [ "$ci" != success ] || [ "$verdict" = block ]; then
 		if [ "$(count "pr-$pr.auto-revisions")" -ge 1 ]; then
+			[ "$dry_run" = 1 ] || summarize "$pr" "$head" "$ci" "$verdict"
 			say "still CI $ci, review $verdict after the automatic revision; over to Brad"; return 1
 		fi
 		kind=auto
@@ -156,9 +210,10 @@ $(gh run view -R "$repo" "${ci#failure }" --log-failed 2>/dev/null | cut -f3- | 
 ## An automated reviewer blocked it
 It saw only the issue, the diff and the description, and it can be wrong. Act on findings you can confirm, and say why for any you don't.
 
-$(gh pr view -R "$repo" "$pr" --json comments -q '[.comments[] | select(.author.login == "'$agent'") | select(.body | contains("head='$head'"))] | last | .body')"
+$(review_comment "$pr" "$head")"
 		fi
 	else
+		[ "$dry_run" = 1 ] || summarize "$pr" "$head" "$ci" "$verdict"
 		say "CI passed and the review didn't block; waiting for Brad to approve and merge, or request changes"; return 1
 	fi
 
@@ -181,22 +236,32 @@ $(gh pr view -R "$repo" "$pr" --json comments -q '[.comments[] | select(.author.
 	} > "$work/prompt.md"
 	worker "$work/prompt.md"
 	if [ "$kind" = brad ]; then bump "pr-$pr.brad-revisions"; echo "$review_id" > "$state/pr-$pr.brad-handled"; else bump "pr-$pr.auto-revisions"; fi
+	local lines too_big=""
+	lines=$(diff_lines HEAD)
+	if [ "$lines" -gt "$max_lines" ]; then
+		too_big="
+
+Not pushed: with this revision the PR comes to $lines changed lines, over the $max_lines-line limit. It stays local on \`$branch\` in the agents' clone. Split the issue."
+	fi
 	gh pr comment -R "$repo" "$pr" --body "**Revision ($( [ "$kind" = brad ] && echo "for Brad's review" || echo "automatic: CI $ci, review $verdict"))**
 
-$(result)" > /dev/null
+$(result)$too_big" > /dev/null
 	if [ "$(git rev-parse HEAD)" = "$head" ]; then say "the worker added no commits"; return 1; fi
+	if [ -n "$too_big" ]; then say "the revision makes it $lines lines, over $max_lines; not pushed, over to Brad"; return 1; fi
 	if [ "$(pr_state "$pr")" != OPEN ]; then
 		say "PR #$pr was $(pr_state "$pr" | tr A-Z a-z) while the worker ran; its revision $(git rev-parse --short HEAD) stays local on $branch, not pushed"
 		return 1
 	fi
 	pending "$(git rev-parse HEAD)" "#$issue revision ($kind)" "$pr"
 	git push -q origin "HEAD:refs/heads/$branch" 2> /dev/null
+	# gh pr list can still report the old head for a few seconds after a push.
+	opened="$pr $branch $(git rev-parse HEAD)"
 	return 0
 }
 
 # Starts the oldest open agent issue that hasn't been tried. Returns 0 if it opened a PR, 1 otherwise.
 start_issue() {
-	local issue title branch pr touchy
+	local issue title branch pr touchy lines
 	issue=""
 	for n in $(gh issue list -R "$repo" --label agent --state open --json number -q 'sort_by(.number) | .[].number'); do
 		if [ -f "$state/issue-$n" ]; then say "skipping #$n, tried before: $(cat "$state/issue-$n") (remove $state/issue-$n to retry)"; continue; fi
@@ -225,15 +290,26 @@ start_issue() {
 $(result)" > /dev/null
 		echo "no PR, $(date +%F)" > "$state/issue-$issue"
 		jq -r --arg date "$(date +%F)" --arg what "#$issue $title" --arg name "$repo_name" \
-			'"| \($date) | \($name) | \($what) | none | sonnet-5.5 medium | \(.num_turns) | $\(.total_cost_usd * 100 | round / 100) | | | |"' "$work/worker.json" >> "$log"
+			'"| \($date) | \($name) | \($what) | none | sonnet-5.5 medium | \(.num_turns) | $\(.total_cost_usd * 100 | round / 100) | | | | |"' "$work/worker.json" >> "$log"
 		say "no commits; commented on #$issue"
 		return 1
 	fi
-	touchy=$(git diff --name-only origin/main...HEAD | grep -E "$flagged" || true)
+	lines=$(diff_lines HEAD)
+	if [ "$lines" -gt "$max_lines" ]; then
+		gh issue comment -R "$repo" "$issue" --body "**The change came to $lines changed lines, over the $max_lines-line limit, so there's no PR.** It stays local on \`$branch\` in the agents' clone. Split this issue into smaller ones. The agent's notes:
+
+$(result)" > /dev/null
+		echo "too big ($lines lines), $(date +%F)" > "$state/issue-$issue"
+		jq -r --arg date "$(date +%F)" --arg what "#$issue $title" --arg name "$repo_name" --arg lines "$lines" \
+			'"| \($date) | \($name) | \($what) | none, \($lines) lines | sonnet-5.5 medium | \(.num_turns) | $\(.total_cost_usd * 100 | round / 100) | | | | |"' "$work/worker.json" >> "$log"
+		say "$lines lines, over $max_lines; no PR, commented on #$issue"
+		return 1
+	fi
+	touchy=$(git diff --name-only origin/main...HEAD | flagged_files | paste -sd, | sed 's/,/, /g')
 	{
 		echo "Closes #$issue"
 		echo
-		[ -n "$touchy" ] && printf '> [!WARNING]\n> This PR changes files that steer CI, agents or dependencies: %s\n\n' "$(echo $touchy | sed 's/ /, /g')"
+		[ -n "$touchy" ] && printf '> [!WARNING]\n> This PR changes files that steer CI, agents or dependencies, or safety code: %s\n\n' "$touchy"
 		result
 	} > "$work/body.md"
 	git push -q -u origin "$branch" 2> /dev/null

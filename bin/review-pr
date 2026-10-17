@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Adversarial review of an agent's pull request, by a model that sees only the issue, the diff and the PR's description:
-# no tools, no repository, no AGENTS.md, no earlier session. It posts its review as a comment from brads-agents.
+# no tools, no repository, no AGENTS.md, no earlier session. It posts its review as a comment from brads-agents and sets
+# the PR head's review status, which the main ruleset requires: pending while it runs, success, failure on blocking
+# findings or a diff over the size limit, error if the review didn't run. A crash leaves it pending, which still blocks.
 #
 #   review-pr REPO PR [--dry-run]           review a PR; --dry-run prints the review instead of posting it
 #   review-pr REPO --head REF --issue N     review a local commit against origin/main (always a dry run)
@@ -8,7 +10,7 @@
 # REPO names a settings file in repos/. Exit status: 0 no blocking findings, 3 blocking findings, 1 the review didn't run.
 set -euo pipefail
 
-. "$(dirname "$(realpath "$0")")/../lib/settings.sh"
+. "$(dirname "$(realpath "$0")")/../lib/tower.sh"
 load_settings "${1:-}"
 shift
 repo_dir=$clone
@@ -40,19 +42,38 @@ trap 'rm -rf "$work"' EXIT
 cd "$repo_dir"
 git fetch -q origin main
 
+agent=brads-agents
+
+# Sets the status when reviewing a PR for real; a dry run only prints.
+status() { [ "$dry_run" = 1 ] || review_status "$head" "$@"; }
+# Stops without a review: STATE (error or failure) and why.
+stop() { echo "$2" >&2; status "$1" "$2"; exit 1; }
+
 description="(none: a local commit, not a pull request)"
 if [ -n "$pr" ]; then
-	gh pr view -R "$repo" "$pr" --json title,body,closingIssuesReferences > "$work/pr.json"
-	issue=$(jq -r '.closingIssuesReferences[0].number // empty' "$work/pr.json")
-	[ -n "$issue" ] || { echo "PR #$pr doesn't close an issue, so there's no task to review it against" >&2; exit 1; }
-	description=$(jq -r .body "$work/pr.json")
+	gh pr view -R "$repo" "$pr" --json title,body,closingIssuesReferences,comments > "$work/pr.json"
 	git fetch -q origin "pull/$pr/head"
 	head=$(git rev-parse FETCH_HEAD)
+	status pending "Reviewing"
+	issue=$(jq -r '.closingIssuesReferences[0].number // empty' "$work/pr.json")
+	[ -n "$issue" ] || stop error "PR #$pr doesn't close an issue, so there's no task to review it against"
+	description=$(jq -r .body "$work/pr.json")
+	# The worker's notes on its revisions, which bin/novice posts as comments, are the author's claims too.
+	revisions=$(jq -r --arg agent "$agent" '.comments[] | select(.author.login == $agent and (.body | startswith("**Revision"))) | .body' "$work/pr.json")
+	if [ -n "$revisions" ]; then
+		description="$description
+
+## The author's notes on its revisions, oldest first
+
+$revisions"
+	fi
 fi
 git diff -U20 "origin/main...$head" > "$work/diff"
 size=$(wc -c < "$work/diff")
-[ "$size" -gt 0 ] || { echo "the diff is empty" >&2; exit 1; }
-[ "$size" -le "$max_diff_bytes" ] || { echo "the diff is $size bytes, over $max_diff_bytes; too big for one review" >&2; exit 1; }
+lines=$(diff_lines "$head")
+[ "$size" -gt 0 ] || stop error "the diff is empty"
+[ "$lines" -le "$max_lines" ] || stop failure "$lines changed lines, over the $max_lines-line limit: split it"
+[ "$size" -le "$max_diff_bytes" ] || stop failure "the diff is $size bytes, over $max_diff_bytes: split it"
 gh issue view -R "$repo" "$issue" --json title,body -q '"# Issue #'"$issue"': " + .title + "\n\n" + .body' > "$work/issue.md"
 
 system='You review pull requests adversarially. An agent wrote this one to resolve the issue you are given. Your job is to find the reasons it should not be merged, before a human spends time on it. Assume it is wrong until the diff shows otherwise. You are not here to encourage anyone.
@@ -69,10 +90,10 @@ if [ "$public" = 1 ]; then
 	system="$system
 $n. This repository is public. Real host names, LAN or tailnet addresses, people, Slack IDs, home paths or secrets in the diff."
 fi
-if [ -n "$safety_code" ]; then
+if [ "${#safety_paths[@]}" -gt 0 ]; then
 	n=$((n + 1))
 	system="$system
-$n. Safety code: $safety_code. Any change there that lets through something that was stopped or asked about blocks unless the issue asked for it."
+$n. Safety code: $(printf '%s\n' "${safety_paths[@]}" | paste -sd, | sed 's/,/, /g'). Any change there that lets through something that was stopped or asked about blocks unless the issue asked for it."
 fi
 system="$system"'
 
@@ -110,15 +131,14 @@ timeout 600 claude -p --model "$model" --effort medium --max-budget-usd "$budget
 	--system-prompt "$system" --tools "" --strict-mcp-config --setting-sources project --no-session-persistence \
 	< "$work/prompt.md" > "$work/out.json" 2> "$work/err" || true
 if ! jq -e '.subtype == "success"' "$work/out.json" > /dev/null 2>&1; then
-	echo "the review didn't finish: $(jq -r '.subtype // empty' "$work/out.json" 2>/dev/null) $(head -c 300 "$work/err")" >&2
-	exit 1
+	stop error "the review didn't finish: $(jq -r '.subtype // empty' "$work/out.json" 2>/dev/null) $(head -c 300 "$work/err")"
 fi
 review=$(jq -r .result "$work/out.json")
 cost=$(jq -r '.total_cost_usd * 100 | round / 100' "$work/out.json")
 case $(printf '%s\n' "$review" | head -1) in
-	"Verdict: block") verdict=block; status=3 ;;
-	"Verdict: no blocking findings") verdict=pass; status=0 ;;
-	*) verdict=unknown; status=1 ;;
+	"Verdict: block") verdict=block; code=3; state=failure; summary="Blocking findings; see the review comment" ;;
+	"Verdict: no blocking findings") verdict=pass; code=0; state=success; summary="No blocking findings" ;;
+	*) verdict=unknown; code=1; state=error; summary="The review didn't follow its answer format" ;;
 esac
 
 comment="$review
@@ -131,6 +151,7 @@ if [ "$dry_run" = 1 ]; then
 	printf '%s\n' "$comment"
 else
 	url=$(gh pr comment -R "$repo" "$pr" --body "$comment")
+	status "$state" "$summary" "$url"
 	echo "PR #$pr: $verdict, est. \$$cost, $url"
 fi
-exit $status
+exit $code
