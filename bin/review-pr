@@ -51,7 +51,7 @@ if [ -n "$pr" ]; then
 	gh pr view -R "$repo" "$pr" --json title,body,closingIssuesReferences,comments > "$work/pr.json"
 	git fetch -q origin "pull/$pr/head"
 	head=$(git rev-parse FETCH_HEAD)
-	status pending "Reviewing"
+	status pending "Automated reviewer: reviewing the diff"
 	issue=$(jq -r '.closingIssuesReferences[0].number // empty' "$work/pr.json")
 	[ -n "$issue" ] || stop error "PR #$pr doesn't close an issue, so there's no task to review it against"
 	description=$(jq -r .body "$work/pr.json")

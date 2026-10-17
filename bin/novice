@@ -22,6 +22,8 @@ model=claude-sonnet-5-5
 budget=3
 RUNS_PER_DAY=10
 BRAD_REVISIONS=2
+# What the PR's review check says from the push until the reviewer starts, so it doesn't read as waiting on Brad.
+review_waiting="Automated reviewer: runs once CI finishes, not Brad's review"
 denied=("Bash(git push*)" "Bash(gh *)" "Bash(git remote*)" "Bash(git config*)" "Bash(curl *)")
 
 dry_run=0
@@ -266,6 +268,7 @@ $(result)$too_big" > /dev/null
 	fi
 	pending "$(git rev-parse HEAD)" "#$issue revision ($kind)" "$pr"
 	git push -q origin "HEAD:refs/heads/$branch" 2> /dev/null
+	review_status "$(git rev-parse HEAD)" pending "$review_waiting"
 	# gh pr list can still report the old head for a few seconds after a push.
 	opened="$pr $branch $(git rev-parse HEAD)"
 	return 0
@@ -328,6 +331,7 @@ $(result)" > /dev/null
 	pr=$(gh pr create -R "$repo" --head "$branch" --base main --title "$title" --body-file "$work/body.md" | grep -oE '[0-9]+$')
 	echo "PR #$pr, $(date +%F)" > "$state/issue-$issue"
 	pending "$(git rev-parse HEAD)" "#$issue $title" "$pr"
+	review_status "$(git rev-parse HEAD)" pending "$review_waiting"
 	say "opened PR #$pr"
 	opened="$pr $branch $(git rev-parse HEAD)"
 	return 0
