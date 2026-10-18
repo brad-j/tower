@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Drafts small issues for a repository and opens them labeled proposed. Brad reads them and promotes the ones he wants
+# by swapping proposed for agent; bin/novice never starts a proposed issue. The model drafting them reads a fresh clone
+# of main (and its siblings) in the sandbox, with only Read, Glob and Grep: it can't change anything or run anything.
+#
+#   draft REPO "REQUEST" [--count N] [--dry-run]     REQUEST says what to draft issues for; --dry-run prints them
+#
+# The rules for a good issue come from PLAYBOOK.md, step 7.
+set -euo pipefail
+
+. "$(dirname "$(realpath "$0")")/../lib/tower.sh"
+load_settings "${1:-}"
+shift
+model=claude-sonnet-5-5
+budget=1
+usage='usage: draft REPO "REQUEST" [--count N] [--dry-run]'
+
+request="" count=3 dry_run=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--dry-run) dry_run=1 ;;
+		--count) count=$2; shift ;;
+		-*) echo "$usage" >&2; exit 1 ;;
+		*) request=$1 ;;
+	esac
+	shift
+done
+[ -n "$request" ] && [[ $count =~ ^[1-9]$ ]] || { echo "$usage" >&2; exit 1; }
+
+GH_TOKEN=$(cat "$agent_token") || { echo "no agent token in $agent_token" >&2; exit 1; }
+export GH_TOKEN
+claude_token=$(cat "$HOME/.config/novices/claude-token") || { echo "no Claude token in ~/.config/novices/claude-token" >&2; exit 1; }
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# Fresh clones, not the agents' clone, which a novice run may be using. Siblings sit beside it, as in the clone.
+name=${repo##*/}
+git clone -q --depth 1 "https://github.com/$repo.git" "$work/$name"
+binds=()
+for sibling in "${siblings[@]}"; do
+	git clone -q --depth 1 "https://github.com/$sibling.git" "$work/${sibling##*/}"
+	binds+=(--ro-bind "$work/${sibling##*/}" "$work/${sibling##*/}")
+done
+
+rules=$(sed -n '/^### 7\. First issues/,/^### 8/p' "$tower/PLAYBOOK.md" | grep '^- ')
+safety=$(printf '%s\n' "${safety_paths[@]}" | paste -sd, | sed 's/,/, /g')
+{
+	echo "You're drafting GitHub issues for $repo_name, checked out here at main. An agent will do each issue on its own, in a fresh session, with only the issue and this repository's AGENTS.md to go on. Brad reads every draft first."
+	echo
+	echo "Read AGENTS.md, then whatever code and docs the request needs. Check every file, function and test you name exists, and every claim against the code."
+	echo
+	echo "# The request"
+	echo
+	echo "$request"
+	echo
+	echo "# What a good issue is"
+	echo
+	echo "$rules"
+	echo "- The safety code is $safety. Don't draft an issue that needs it changed unless the request asks for one; if it does, name those files in the issue so Brad sees it. Otherwise don't mention those files at all, not even as out of scope: an issue that names one waits for Brad's safety-ok."
+	echo "- At most $count issues, fewer if fewer are needed. Don't repeat one that's already open:"
+	gh issue list -R "$repo" --state open --limit 100 --json number,title -q '.[] | "  - #\(.number) \(.title)"'
+	echo
+	echo "# Answer"
+	echo
+	echo "Only the issues, in the order to work them, each in this form and nothing before or after:"
+	echo
+	echo "=== ISSUE"
+	echo "# A short title saying what's wrong or what's wanted"
+	echo "The body, in Markdown: what and why, the files and functions involved, \"Done when:\" with its list, and \"Out of scope:\"."
+} > "$work/prompt.md"
+
+cd "$work/$name"
+CLAUDE_CODE_OAUTH_TOKEN=$claude_token timeout 900 "$tower/bin/sandbox" "$work/$name" "${binds[@]}" -- \
+	claude -p --model "$model" --effort medium --max-budget-usd "$budget" --output-format json \
+	--strict-mcp-config --setting-sources project --no-session-persistence --tools Read Glob Grep \
+	< "$work/prompt.md" > "$work/out.json" 2> "$work/err" || true
+if ! jq -e '.subtype == "success" and (.is_error | not)' "$work/out.json" > /dev/null 2>&1; then
+	echo "the drafting didn't finish: $(jq -r '.subtype // empty' "$work/out.json" 2> /dev/null) $(head -c 300 "$work/err")" >&2
+	exit 1
+fi
+cost=$(jq -r '.total_cost_usd * 100 | round / 100' "$work/out.json")
+
+# One file per issue: its title on the first line, then the body.
+mkdir "$work/issues"
+jq -r .result "$work/out.json" | awk -v dir="$work/issues" '
+	/^=== ISSUE/ { n++; file = sprintf("%s/%02d", dir, n); title = 0; next }
+	n && !title && /^# / { sub(/^# /, ""); print > file; title = 1; next }
+	n && title { print > file }'
+set -- "$work/issues"/*
+if [ ! -e "$1" ]; then
+	echo "no issues in the answer, est. \$$cost:" >&2
+	jq -r .result "$work/out.json" >&2
+	exit 1
+fi
+
+footer="
+
+---
+<sub>Drafted at Brad's request by a model that read main (Sonnet 5.5, est. \$$cost for the batch). Brad promotes it to \`agent\` or closes it.</sub>"
+for file in "$work/issues"/*; do
+	title=$(head -1 "$file")
+	body="$(tail -n +2 "$file" | sed '/./,$!d')$footer"
+	if [ "$dry_run" = 1 ]; then
+		printf '=== %s\n%s\n\n' "$title" "$body"
+	else
+		gh issue create -R "$repo" --label proposed --title "$title" --body "$body"
+	fi
+done
+echo "est. \$$cost" >&2

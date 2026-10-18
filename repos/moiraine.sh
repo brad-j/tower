@@ -15,7 +15,8 @@ check="pnpm check && pnpm e2e"
 
 # Worker tools. bin/novice adds its own deny list (push, gh, remote, config, curl) on top.
 allowed=(Read Edit Write Glob Grep "Bash(pnpm *)" "Bash(node *)" "Bash(git status*)" "Bash(git diff*)" "Bash(git add *)"
-	"Bash(git commit *)" "Bash(git log*)" "Bash(git show*)" "Bash(ls *)" "Bash(cat *)" "Bash(grep *)" "Bash(mktemp *)" "Bash(rm -rf /tmp/*)")
+	"Bash(git commit *)" "Bash(git log*)" "Bash(git show*)" "Bash(ls *)" "Bash(cat *)" "Bash(grep *)" "Bash(mktemp *)" "Bash(rm -rf /tmp/*)"
+	"Bash(taskset *)")
 
 # Mounted read-only in the sandbox, besides Node, the clone and the siblings: pnpm's store and Playwright's browsers.
 sandbox_ro=("$HOME/.local/share/pnpm/store" "$HOME/.cache/ms-playwright")

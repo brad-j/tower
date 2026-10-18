@@ -161,6 +161,20 @@ review_comment() { gh pr view -R "$repo" "$1" --json comments -q '[.comments[] |
 
 pr_state() { gh pr view -R "$repo" "$1" --json state -q .state; }
 
+# Whether issue or PR $1 has the label $2 and Brad was the last to apply it. Only he labels issues agent or safety-ok.
+labeled_by_owner() {
+	gh issue view -R "$repo" "$1" --json labels -q '.labels[].name' | grep -qxF "$2" || return 1
+	[ "$(gh api --paginate "repos/$repo/issues/$1/events" -q '.[] | select(.event == "labeled" and .label.name == "'"$2"'") | .actor.login' | tail -1)" = "$owner" ]
+}
+
+# Comments BODY on issue $1 once: not again while an earlier comment of the agent's carries the marker for KEY $2.
+note_once() {
+	local marker="<!-- tower note=$2 -->"
+	gh issue view -R "$repo" "$1" --json comments -q '.comments[] | select(.author.login == "'$agent'") | .body' | grep -qF "$marker" && return 0
+	gh issue comment -R "$repo" "$1" --body "$3
+$marker" > /dev/null
+}
+
 # Gives PR $1 the label $2, removing any other label with the same prefix (size:, vouch:).
 set_label() {
 	local pr=$1 want=$2 have found=0
@@ -312,18 +326,25 @@ $(review_comment "$pr" "$head")"
 	} > "$work/prompt.md"
 	worker "$work/prompt.md"
 	if [ "$kind" = brad ]; then bump "pr-$pr.brad-revisions"; echo "$review_id" > "$state/pr-$pr.brad-handled"; else bump "pr-$pr.auto-revisions"; fi
-	local lines too_big=""
+	local lines too_big="" new_safety
 	lines=$(diff_lines HEAD)
 	if [ "$lines" -gt "$max_lines" ]; then
 		too_big="
 
 Not pushed: with this revision the PR comes to $lines changed lines, over the $max_lines-line limit. It stays local on \`$branch\` in the agents' clone. Split the issue."
 	fi
+	# Safety code this revision brings into the PR, without Brad's safety-ok on the issue.
+	new_safety=$(comm -13 <(git diff --name-only "origin/main...$head" | safety_files | sort) <(git diff --name-only origin/main...HEAD | safety_files | sort) | paste -sd, | sed 's/,/, /g')
+	if [ -n "$new_safety" ] && ! labeled_by_owner "$issue" safety-ok; then
+		too_big="
+
+Not pushed: this revision changes safety code ($new_safety), and the issue has no \`safety-ok\` from $owner. It stays local on \`$branch\` in the agents' clone."
+	fi
 	gh pr comment -R "$repo" "$pr" --body "**Revision ($( [ "$kind" = brad ] && echo "for Brad's review" || echo "automatic: CI $ci, review $verdict"))**
 
 $(result)$too_big" > /dev/null
 	if [ "$(git rev-parse HEAD)" = "$head" ]; then say "the worker added no commits"; return 1; fi
-	if [ -n "$too_big" ]; then say "the revision makes it $lines lines, over $max_lines; not pushed, over to Brad"; return 1; fi
+	if [ -n "$too_big" ]; then say "the revision isn't pushed: ${too_big#*Not pushed: }"; return 1; fi
 	if [ "$(pr_state "$pr")" != OPEN ]; then
 		say "PR #$pr was $(pr_state "$pr" | tr A-Z a-z) while the worker ran; its revision $(git rev-parse --short HEAD) stays local on $branch, not pushed"
 		return 1
@@ -340,8 +361,16 @@ $(result)$too_big" > /dev/null
 start_issue() {
 	local issue title branch pr touchy lines
 	issue=""
+	local named
 	for n in $(gh issue list -R "$repo" --label agent --state open --json number -q 'sort_by(.number) | .[].number'); do
 		if [ -f "$state/issue-$n" ]; then say "skipping #$n, tried before: $(cat "$state/issue-$n") (remove $state/issue-$n to retry)"; continue; fi
+		if ! labeled_by_owner "$n" agent; then say "skipping #$n: its agent label wasn't applied by $owner"; continue; fi
+		named=$(gh issue view -R "$repo" "$n" --json title,body -q '.title + "\n" + .body' | safety_named)
+		if [ -n "$named" ] && ! labeled_by_owner "$n" safety-ok; then
+			say "skipping #$n: it names safety code ($named) and has no safety-ok from $owner"
+			[ "$dry_run" = 1 ] || note_once "$n" safety "**Not started: this issue names safety code ($named).** Agents stay away from safety code until $owner adds the \`safety-ok\` label to an issue. Add it if this one should go ahead, or take the safety code out of the issue."
+			continue
+		fi
 		issue=$n; break
 	done
 	[ -n "$issue" ] || { say "no open agent issues left to start"; return 1; }
@@ -369,6 +398,18 @@ $(result)" > /dev/null
 		jq -r --arg date "$(date +%F)" --arg what "#$issue $title" --arg name "$repo_name" \
 			'"| \($date) | \($name) | \($what) | none | sonnet-5.5 medium | \(.num_turns) | $\(.total_cost_usd * 100 | round / 100) | | | | |"' "$work/worker.json" | log_add "#$issue, no PR"
 		say "no commits; commented on #$issue"
+		return 1
+	fi
+	local touched_safety
+	touched_safety=$(git diff --name-only origin/main...HEAD | safety_files | paste -sd, | sed 's/,/, /g')
+	if [ -n "$touched_safety" ] && ! labeled_by_owner "$issue" safety-ok; then
+		gh issue comment -R "$repo" "$issue" --body "**The change touched safety code ($touched_safety), so there's no PR.** Agents stay away from safety code unless $owner adds the \`safety-ok\` label. It stays local on \`$branch\` in the agents' clone. Add the label and remove ~/novices/state/$repo_name/issue-$issue to let it run again, or narrow the issue. The agent's notes:
+
+$(result)" > /dev/null
+		echo "touched safety code ($touched_safety), $(date +%F)" > "$state/issue-$issue"
+		jq -r --arg date "$(date +%F)" --arg what "#$issue $title" --arg name "$repo_name" \
+			'"| \($date) | \($name) | \($what) | none, safety code | sonnet-5.5 medium | \(.num_turns) | $\(.total_cost_usd * 100 | round / 100) | | | | |"' "$work/worker.json" | log_add "#$issue, no PR, safety code"
+		say "touched safety code ($touched_safety) without safety-ok; no PR, commented on #$issue"
 		return 1
 	fi
 	lines=$(diff_lines HEAD)

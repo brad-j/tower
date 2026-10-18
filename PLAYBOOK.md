@@ -43,14 +43,14 @@ Run it without `--apply` and read the plan with Brad. It changes a repository's 
 
 ### 7. First issues (session)
 
-Write drafts in `~/novices/issues.md`, read them with Brad, and post the ones he picks. Brad (or the session, with his go-ahead) adds the `agent` label; models never label issues `agent` on their own.
+`bin/draft NAME "what to draft issues for"` has a model read main and open up to three issues labeled `proposed`; `--dry-run` prints them instead. Or write drafts by hand in `~/novices/issues.md`. Brad reads them and promotes the ones he wants by swapping `proposed` for `agent`. Only Brad applies `agent` and `safety-ok`: novice checks who labeled an issue and skips it otherwise.
 
 - One small change, well under 300 changed lines (bigger diffs are refused). Several small issues beat one big one.
 - The body names the files and functions involved and what to do.
 - "Done when" lists conditions a reader can check: a command with its exit status and output, a test that must exist and what it asserts, and the check passing.
 - If a test can't prove it (README wording, UI layout), the issue says so. Its PR gets `needs-brad`.
 - An "Out of scope" line for the nearby things it shouldn't touch.
-- Nothing in `safety_paths` or flagged files until the repository is vouched for.
+- Nothing in `safety_paths` unless Brad adds `safety-ok` to the issue: novice skips an issue that names safety code without it, and won't push a change that touches safety code without it. Flagged files (CI, the manifest and lockfile, AGENTS.md) only when the issue is about them.
 - The loop takes the oldest open `agent` issue first, so post them in the order to work them.
 
 ### 8. First run (tower)

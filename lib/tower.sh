@@ -14,6 +14,8 @@ max_lines=300
 # Labels tower uses on each repository, as NAME|COLOR|DESCRIPTION.
 labels=(
 	"agent|5319E7|Ready for an agent to work on"
+	"proposed|C5DEF5|Drafted by a model for Brad to read; he promotes it to agent or closes it"
+	"safety-ok|B60205|Brad allows an agent to change safety code for this issue"
 	"needs-brad|D876E3|Brad reads this PR closely: flagged files, safety code, docs, or something a test can't prove"
 	"size:S|0E8A16|Under 30 changed lines, lockfiles not counted"
 	"size:M|FBCA04|30 to 99 changed lines, lockfiles not counted"
@@ -102,16 +104,36 @@ diff_lines() {
 	git diff --numstat "origin/main...$1" -- . "${excludes[@]}" | awk '{ n += $1 + $2 } END { print n + 0 }'
 }
 
-# Of the file names on stdin, the ones Brad reads closely: the flagged pattern and the safety code.
-flagged_files() {
+# Of the file names on stdin, the ones in the safety code.
+safety_files() {
 	local file path
 	while IFS= read -r file; do
 		[ -n "$file" ] || continue
-		if [[ $file =~ $flagged ]]; then echo "$file"; continue; fi
 		for path in "${safety_paths[@]}"; do
 			if [[ $file == "$path"* ]]; then echo "$file"; break; fi
 		done
 	done
+}
+
+# Of the file names on stdin, the ones Brad reads closely: the flagged pattern and the safety code.
+flagged_files() {
+	local file
+	while IFS= read -r file; do
+		[ -n "$file" ] || continue
+		if [[ $file =~ $flagged ]]; then echo "$file"; else safety_files <<< "$file"; fi
+	done
+}
+
+# The safety paths that the text on stdin names, by path or by file name (src/markdown.tsx or markdown.tsx; a
+# directory as src/browser/ or browser/), comma-separated.
+safety_named() {
+	local text path name found=()
+	text=$(cat)
+	for path in "${safety_paths[@]}"; do
+		name=${path%/}; name=${name##*/}; [[ $path == */ ]] && name+=/
+		if grep -qF -e "$path" -e "$name" <<< "$text"; then found+=("$path"); fi
+	done
+	[ "${#found[@]}" = 0 ] || printf '%s\n' "${found[@]}" | paste -sd, | sed 's/,/, /g'
 }
 
 # Sets the review commit status on SHA, which the main ruleset requires: STATE is pending, success, failure or error.

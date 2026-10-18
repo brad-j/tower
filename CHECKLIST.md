@@ -19,8 +19,9 @@ What only Brad does. Everything else is tower's job.
 ## Issues
 
 - Pick or write each issue before code exists. It's one small change with a "Done when" list you could check yourself.
-- Only you add the `agent` label.
-- No issues in safety code until the repository is vouched for.
+- Only you add the `agent` label; novice skips an issue labeled by anyone else.
+- `bin/draft NAME "what you want"` opens `proposed` issues. Read them, then swap `proposed` for `agent` on the ones you want, or close them.
+- An issue that names safety code waits until you add `safety-ok`. Add it only when you mean an agent to change that code, and read those PRs closely.
 
 ## Now and then
 

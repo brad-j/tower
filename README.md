@@ -9,6 +9,7 @@ To set tower up on a machine, follow `SETUP.md`. To add a repository, follow `PL
 - `bin/tower add-repo NAME [--apply]`: checks that a repository is ready and sets up its GitHub settings, labels, ruleset, the agents' clone and the check in the sandbox. Without `--apply` it changes nothing.
 - `bin/novice REPO [--dry-run]`: the loop. Starts the oldest untried `agent` issue or revises the open agent PR, and stops when it's Brad's turn.
 - `bin/review-pr REPO PR [--dry-run]` or `bin/review-pr REPO --head REF --issue N`: the reviewer. Sees only the issue, the PR description and the diff.
+- `bin/draft REPO "REQUEST" [--count N] [--dry-run]`: a model reads main and opens up to N issues (default 3) labeled `proposed` for Brad to promote to `agent`.
 - `bin/sandbox DIR [BWRAP_OPTION...] -- COMMAND...`: the bubblewrap sandbox the worker runs in.
 - `systemd/tower@.timer`: runs `bin/novice NAME` every 15 minutes for each repository whose timer is enabled (SETUP.md, step 9).
 
@@ -20,6 +21,7 @@ What they leave on a PR:
 - When it's Brad's turn, novice posts a one-line summary (CI, review, lines changed, flagged files, docs, how many done conditions the reviewer couldn't verify) and adds the `needs-brad` label if the PR touches flagged files or safety code, changes docs, or has unverified done conditions.
 - novice labels each agent PR by size (`size:S` under 30 changed lines, `size:M` under 100, `size:L` up to 300, `size:XL` over) and by trust: `vouch:unvouched` until Brad sets `vouched=1` in the repo's settings, then `vouch:trusted`. Brad's own PRs get `vouch:trusted`. Vouching changes only the label. `lib/tower.sh` lists every label tower uses.
 - A failed CI run is rerun once before it counts. If the rerun passes, the summary and log name the flaky test.
+- novice starts only issues whose `agent` label Brad applied. It skips an issue that names safety code, and won't push a change that touches it, unless Brad has added `safety-ok`.
 - Diffs over 300 changed lines (`max_lines` in `lib/tower.sh`, lockfiles not counted) aren't opened, pushed or reviewed. The issue needs splitting.
 
 ## Layout
