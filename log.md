@@ -26,3 +26,4 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-17 | moiraine | #7 One app-wide event stream in place of polling activity, approvals, schedule and spend | none | sonnet-5.5 medium | 2 | $0.05 | | | | |
 | 2026-10-17 | gaidin | #12 An app-wide event stream, starting with approvals | #14 | sonnet-5.5 medium | 12 | $0.17 | success | block | | |
 | 2026-10-17 | gaidin | #12 revision (auto) | #14 | sonnet-5.5 medium | 13 | $0.18 | success | pass | | |
+| 2026-10-17 | gaidin | #13 Activity and conversation events on the app-wide stream | #15 | sonnet-5.5 medium | 34 | $0.61 | success | block | | |
