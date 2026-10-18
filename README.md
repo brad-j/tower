@@ -27,7 +27,7 @@ What they leave on a PR:
 - `repos/NAME.sh`: per-repo settings (GitHub repo, clone, state dir, setup and check commands, worker tools, sandbox paths, flagged files, safety code, docs, uncounted files, public or not). `lib/tower.sh` loads them, says which ones are missing, and holds the checks both scripts share.
 - `lib/tower.sh`: the accounts, labels, size limit and ruleset shared by the scripts. `lib/pre-push`: the hook installed in each clone.
 - `templates/`: AGENTS.md and CI to start a new repository from.
-- `log.md`: one line per worker run, with what Brad did and any problem found after merge.
+- `log.md`: one line per worker run, with what Brad did and any problem found after merge. novice commits each line it adds ("Log REPO: ...") but never pushes tower; Brad's pushes take them up.
 - `~/novices/`, outside this repo: the agents' clones (`~/novices/gaidin`), loop state (`~/novices/state/NAME/`) and issue drafts.
 
 Secrets stay outside the repo: the agent's GitHub token in `~/.config/gh-agents/token`, the worker's Claude token in `~/.config/novices/claude-token`. Scripts that talk to GitHub always set `GH_TOKEN` from the agent's token, so they can't fall back to Brad's keyring login.

@@ -14,6 +14,7 @@ What only Brad does. Everything else is tower's job.
 
 - Fill in "Brad stepped in" in `log.md`: merged as-is, merged after a fix (what), or closed (why).
 - When something a PR broke turns up later, however late, note it under "After merge" with a link.
+- Commit your edits to `log.md` and push tower now and then. The loop commits its own log lines but never pushes, and while `log.md` has your uncommitted edits it only appends.
 
 ## Issues
 
