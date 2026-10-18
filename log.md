@@ -31,3 +31,4 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-17 | silviana | #2 A usage page: per-repo totals for 30 days and today, and the limits | #7 | sonnet-5.5 medium | 10 | $0.18 | success | pass | | |
 | 2026-10-17 | silviana | #3 Usage page: a bar chart of daily spend, stacked by repo | #8 | sonnet-5.5 medium | 8 | $0.15 | success | block | | |
 | 2026-10-17 | silviana | #3 revision (auto) | #8 | sonnet-5.5 medium | 9 | $0.12 | success | pass | | |
+| 2026-10-17 | silviana | #4 Usage: reviewer and draft costs from the journal | #9 | sonnet-5.5 medium | 18 | $0.54 | success | pass | | |
