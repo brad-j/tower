@@ -14,7 +14,7 @@ set -euo pipefail
 load_settings "${1:-}"
 shift
 repo_dir=$clone
-model=claude-sonnet-5-5
+model=claude-opus-5-5
 budget=0.75
 max_diff_bytes=150000
 usage="usage: review-pr REPO PR [--dry-run] | REPO --head REF --issue N"
@@ -124,7 +124,7 @@ Done conditions the diff cannot show, or "None."'
 
 # An empty directory, no tools, no settings files and no MCP servers: the model has only what's in the prompt.
 mkdir "$work/empty" && cd "$work/empty"
-timeout 600 claude -p --model "$model" --effort medium --max-budget-usd "$budget" --output-format json \
+timeout 600 claude -p --model "$model" --effort high --max-budget-usd "$budget" --output-format json \
 	--system-prompt "$system" --tools "" --strict-mcp-config --setting-sources project --no-session-persistence \
 	< "$work/prompt.md" > "$work/out.json" 2> "$work/err" || true
 if ! jq -e '.subtype == "success"' "$work/out.json" > /dev/null 2>&1; then
@@ -141,7 +141,7 @@ esac
 comment="$review
 
 ---
-<sub>Adversarial review by a model with no tools that saw only issue #$issue, this PR's description and its diff (Sonnet 5.5, est. \$$cost). A human decides.</sub>
+<sub>Adversarial review by a model with no tools that saw only issue #$issue, this PR's description and its diff (Opus 5.5, est. \$$cost). A human decides.</sub>
 <!-- review-pr verdict=$verdict head=$head -->"
 
 if [ "$dry_run" = 1 ]; then
