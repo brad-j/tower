@@ -25,3 +25,4 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-17 | moiraine | #8 revision (brad) | #13 | sonnet-5.5 medium | 10 | $0.21 | success on a rerun (flaky: `e2e/app.spec.ts:212:1 › an agent in the rail goes back to its conversation shown last, or home from its own conversation`) | pass | | |
 | 2026-10-17 | moiraine | #7 One app-wide event stream in place of polling activity, approvals, schedule and spend | none | sonnet-5.5 medium | 2 | $0.05 | | | | |
 | 2026-10-17 | gaidin | #12 An app-wide event stream, starting with approvals | #14 | sonnet-5.5 medium | 12 | $0.17 | success | block | | |
+| 2026-10-17 | gaidin | #12 revision (auto) | #14 | sonnet-5.5 medium | 13 | $0.18 | success | pass | | |
