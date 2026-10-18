@@ -50,3 +50,4 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-18 | backroadtrips | #12 TomTom benchmark: build requests and summarize unpaved sections and road names | none, 313 lines | sonnet-5.5 medium | 6 | $0.16 | | | | |
 | 2026-10-18 | backroadtrips | #12 TomTom benchmark: build requests and summarize unpaved sections and road names | #26 | sonnet-5.5 medium | 7 | $0.18 | success | pass | | |
 | 2026-10-18 | backroadtrips | #13 TomTom benchmark runner that keeps the API key out of its output | #27 | sonnet-5.5 medium | 5 | $0.12 | success | block | | |
+| 2026-10-18 | backroadtrips | #13 revision (auto) | #27 | sonnet-5.5 medium | 4 | $0.07 | success | pass | | |
