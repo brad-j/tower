@@ -38,3 +38,4 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-18 | backroadtrips | #5 The brief accepts leave dates in the past | #17 | sonnet-5.5 medium | 11 | $0.19 | success | pass | merged as-is | |
 | 2026-10-18 | backroadtrips | #6 Edits after applying a trip window give no sign they aren't applied | #18 | sonnet-5.5 medium | 6 | $0.12 | success | pass | merged as-is | |
 | 2026-10-18 | backroadtrips | #2 README's Validate section predates lint, pnpm e2e and CI | #19 | sonnet-5.5 medium | 7 | $0.1 | success | pass | merged as-is | |
+| 2026-10-18 | backroadtrips | #7 404 and error pages have no skip-link target, and the sign-in failure notice is unstyled on the planner | #20 | sonnet-5.5 medium | 9 | $0.11 | success | pass | | |
