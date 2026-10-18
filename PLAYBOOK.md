@@ -8,7 +8,7 @@ How to add a repository to tower and run the loop on it. Steps marked "session" 
 
 - The stack is one tower supports: Node with pnpm on Linux. Not yet: Swift and macOS (amyrlin) need a Mac worker and a macOS sandbox; Rust needs `~/.cargo` and `~/.rustup` in `sandbox_ro` and its own CI template.
 - One command runs the type check, lint and tests, with no keys, no personal config and no network beyond installing packages. If the tests wouldn't catch a broken change, the first issues add tests.
-- It's public. Rulesets on private repositories need GitHub Pro.
+- Public or private. Rulesets on a private repository need GitHub Pro, which Brad has had since 2026-10-17, and its CI spends the plan's Actions minutes, which public repositories don't. `tower add-repo` and `bin/draft` clone as the agent, so a private repository needs brads-agents as a collaborator (step 6 invites it) before `bin/draft` works on it.
 - Note any sibling it depends on (`link:../NAME` in package.json) and list it in `siblings`. tower checks it out beside the clone at its main, refreshes and installs it before each run, and mounts it read-only for the worker. Its tests must not write into the sibling.
 - tower works only in `~/novices/NAME`. Brad's own checkout and its uncommitted work are never touched.
 

@@ -60,7 +60,9 @@ if [ "$visibility" = public ]; then
 	ok "public"
 	[ "$public" = 1 ] || todo "the repository is public: set public=1 in repos/$repo_name.sh"
 else
-	todo "$visibility: rulesets need a public repository on Brad's plan"
+	# Rulesets on a private repository need GitHub Pro; without it GitHub refuses even to list them.
+	if as_brad api "repos/$repo/rulesets" > /dev/null 2>&1; then ok "$visibility, and rulesets are available on it"
+	else todo "$visibility, and GitHub won't give it rulesets: that needs GitHub Pro on $owner"; fi
 	[ "$public" = 0 ] || todo "the repository isn't public: set public=0 in repos/$repo_name.sh"
 fi
 if [ "$(jq -r .default_branch "$work/repo.json")" = main ]; then ok "default branch main"; else todo "the default branch isn't main"; fi
@@ -139,8 +141,12 @@ fi
 echo "$repo_name: the agents' clone, $clone"
 url=https://github.com/$repo.git
 helper='!f() { test "$1" = get || exit 0; t=$(cat '"$agent_token"' 2>/dev/null) || { echo "no agent token in ~/.config/gh-agents/token" >&2; exit 1; }; printf '"'"'username='"$agent"'\npassword=%s\n'"'"' "$t"; }; f'
+# An empty helper first, so no helper from Brad's global config runs; then one that only reads the agent's token.
+key=credential.https://github.com.helper
+# Clones with that helper from the start, so a private repository can be cloned; --config keeps it in the clone.
+clone_as_agent() { git clone -q --config "$key=" --config "$key=$helper" "$1" "$2"; }
 if [ ! -d "$clone/.git" ]; then
-	change "clone $repo" git clone -q "$url" "$clone"
+	change "clone $repo" clone_as_agent "$url" "$clone"
 fi
 if [ -d "$clone/.git" ]; then
 	setting() { git -C "$clone" config --local --get "$1" || true; }
@@ -151,8 +157,6 @@ if [ -d "$clone/.git" ]; then
 	done
 	if [ "$(git -C "$clone" remote get-url origin)" = "$url" ]; then ok "origin is $url"
 	else change "point origin at $url" git -C "$clone" remote set-url origin "$url"; fi
-	# An empty helper first, so no helper from Brad's global config runs; then one that only reads the agent's token.
-	key=credential.https://github.com.helper
 	set_helper() {
 		git -C "$clone" config --local --unset-all "$key" || true
 		git -C "$clone" config --local --add "$key" ""
@@ -165,11 +169,12 @@ if [ -d "$clone/.git" ]; then
 else
 	echo "  would  set its identity, credential helper and pre-push hook"
 fi
-# Siblings are only fetched and read, never pushed, so they need none of the clone's settings.
+# Siblings are only fetched and read, never pushed, so of the clone's settings they need only the credential helper,
+# for a private sibling.
 for sibling in "${siblings[@]}"; do
 	dir=$(sibling_dir "$sibling")
 	if [ -d "$dir/.git" ]; then ok "$sibling is checked out beside it, at $dir"
-	else change "clone $sibling beside it, at $dir" git clone -q "https://github.com/$sibling.git" "$dir"; fi
+	else change "clone $sibling beside it, at $dir" clone_as_agent "https://github.com/$sibling.git" "$dir"; fi
 done
 
 echo "$repo_name: the check in the sandbox"

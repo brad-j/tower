@@ -34,11 +34,18 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 # Fresh clones, not the agents' clone, which a novice run may be using. Siblings sit beside it, as in the clone.
+# As the agent, so private repositories clone too: the helper reads GH_TOKEN from the environment, and with -c rather
+# than --config the clones keep no trace of it.
 name=${repo##*/}
-git clone -q --depth 1 "https://github.com/$repo.git" "$work/$name"
+key=credential.https://github.com.helper
+agent_clone() {
+	git -c "$key=" -c "$key="'!f() { test "$1" = get || exit 0; printf "username='"$agent"'\npassword=%s\n" "$GH_TOKEN"; }; f' \
+		clone -q --depth 1 "$@"
+}
+agent_clone "https://github.com/$repo.git" "$work/$name"
 binds=()
 for sibling in "${siblings[@]}"; do
-	git clone -q --depth 1 "https://github.com/$sibling.git" "$work/${sibling##*/}"
+	agent_clone "https://github.com/$sibling.git" "$work/${sibling##*/}"
 	binds+=(--ro-bind "$work/${sibling##*/}" "$work/${sibling##*/}")
 done
 
