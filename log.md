@@ -46,3 +46,4 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-18 | backroadtrips | #9 revision (auto) | #23 | sonnet-5.5 medium | 7 | $0.1 | success | pass | | |
 | 2026-10-18 | backroadtrips | #10 The first screen at 1440×900 shows none of the selected day | #24 | sonnet-5.5 medium | 15 | $0.21 | success | block | | |
 | 2026-10-18 | backroadtrips | #10 revision (auto) | #24 | sonnet-5.5 medium | 10 | $0.16 | success | pass | | |
+| 2026-10-18 | backroadtrips | #16 Docs don't say deploy previews can't be published to production on a site with a database | #25 | sonnet-5.5 medium | 10 | $0.09 | success | pass | | |
