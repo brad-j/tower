@@ -37,12 +37,12 @@ Run it without `--apply` and read the plan with Brad. It changes a repository's 
 
 ### 7. First issues (session)
 
-`bin/draft NAME "what to draft issues for"` has a model read main and open up to three issues labeled `proposed`; `--dry-run` prints them instead. Or write drafts by hand in `~/novices/issues.md`. Brad reads them and promotes the ones he wants by swapping `proposed` for `agent`. Only Brad applies `agent` and `safety-ok`: novice checks who labeled an issue and skips it otherwise.
+`bin/draft NAME "what to draft issues for"` has a model read main and open up to three issues labeled `proposed`; `--dry-run` prints them instead. Or write drafts by hand in `~/novices/issues.md`. Brad reads them and promotes the ones he wants by swapping `proposed` for `agent`. Only Brad applies `agent`, `safety-ok` and `big-ok`: novice checks who labeled an issue and skips it otherwise. `bin/draft` passes the list below to its model as the rules for a good issue, so editing it changes what draft asks for.
 
-- One small change, well under 300 changed lines (bigger diffs are refused). Several small issues beat one big one.
+- One small change, well under 300 added lines (bigger diffs are refused unless Brad adds `big-ok`; removed lines don't count). Several small issues beat one big one.
 - The body names the files and functions involved and what to do.
 - "Done when" lists conditions a reader can check: a command with its exit status and output, a test that must exist and what it asserts, and the check passing.
-- If a test can't prove it (README wording, UI layout), the issue says so. Its PR gets `needs-brad`.
+- If a test can't prove it (README wording, UI layout), the issue says so. The reviewer lists it as unverified, and the PR still merges itself; anything that matters should be checkable from the diff.
 - An "Out of scope" line for the nearby things it shouldn't touch.
 - Nothing in `safety_paths` unless Brad adds `safety-ok` to the issue: novice skips an issue that names safety code without it, and won't push a change that touches safety code without it. Flagged files (CI, the manifest and lockfile, AGENTS.md) only when the issue is about them.
 - The loop takes the oldest open `agent` issue first, so post them in the order to work them.
@@ -54,12 +54,12 @@ Run it without `--apply` and read the plan with Brad. It changes a repository's 
 ## Running the loop
 
 - `bin/novice NAME` steps until it's Brad's turn. Its timer runs it every 2 minutes, and it exits at once unless something changed on GitHub; `journalctl --user -u tower@NAME` shows what it did.
-- An issue the agent didn't finish, or one that came out over 300 lines, is marked tried. Edit it (fix it, or split it and narrow this one) and it runs again; so does one whose "Blocked by" issue is closed as completed. Removing `~/novices/state/NAME/issue-N` still works too.
+- An issue the agent didn't finish, or one that came out over 300 added lines, is marked tried. Edit it (fix it, or split it and narrow this one) and it runs again. So does a too-big one once Brad adds `big-ok`, and one whose "Blocked by" issue is closed as completed. Removing `~/novices/state/NAME/issue-N` still works too.
 - A failed CI run is rerun once before the agent revises. A test that passes on the rerun is named as flaky in the summary comment and log.md's CI column; a flaky test is a bug to fix with its own issue, not something to rerun forever.
 - A PR merged or closed before the loop came back to it still gets its log line on the next run.
 - novice commits each log line in tower itself and never pushes, since pushing tower uses Brad's SSH key.
 - novice fills in log.md's "Brad stepped in" and, for reverts and "Broken by #N" issues, "After merge". Brad writes any other problem found after merge there himself, with a link. If a line in AGENTS.md would have prevented it, add one under "Mistakes agents have made" in a PR.
-- Vouching: once log.md shows about 10 merged PRs on a repository with nothing found after merge, Brad can set `vouched=1` in its settings. It changes only the label. Opening safety code to agents is a separate decision. Auto-merge (`automerge=1`, then `tower add-repo NAME --apply`) is another, made per repository.
+- Vouching: once log.md shows about 10 merged PRs on a repository with nothing found after merge, Brad can set `vouched=1` in its settings. It changes only the label. Opening safety code to agents is a separate decision. Auto-merge is on by default (`automerge=1`); a repository where Brad approves every PR sets `automerge=0` and runs `tower add-repo NAME --apply`.
 
 ## Lessons
 

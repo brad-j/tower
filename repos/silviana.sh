@@ -23,4 +23,4 @@ uncounted+=(src/routeTree.gen.ts)
 public=0
 
 vouched=0
-automerge=0
+automerge=1

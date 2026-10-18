@@ -2,7 +2,7 @@
 
 Runs coding agents on Brad's repositories through small GitHub issues, branches and PRs, with tests as the merge gate and an adversarial reviewer that shares no memory with the worker. Each repository gets a settings file; the scripts don't name any one of them.
 
-To set tower up on a machine, follow `SETUP.md`. To add a repository, follow `PLAYBOOK.md`. What only Brad does is in `CHECKLIST.md`.
+To set tower up on a machine, follow `SETUP.md`. To add a repository, follow `PLAYBOOK.md`. What only Brad does is in `CHECKLIST.md`. How a run proceeds, who can do what, the loop's state files and what to check when it does nothing are in `INTERNALS.md`.
 
 ## Commands
 
@@ -19,14 +19,14 @@ To set tower up on a machine, follow `SETUP.md`. To add a repository, follow `PL
 What they leave on a PR:
 
 - review-pr tells the reviewer CI's result and test counts on the PR's head, so a passing check isn't listed as unverified. It sets the commit status `review`, which the repo's `main` ruleset requires alongside CI: pending while it runs, success, failure on blocking findings, error if it didn't run. An unreviewed or blocked PR can't merge without an admin bypass.
-- When it's Brad's turn, novice posts a one-line summary (CI, review, lines changed, flagged files, docs, how many done conditions the reviewer couldn't verify) and adds the `needs-brad` label if the PR touches flagged files or safety code, changes docs, or has unverified done conditions.
+- Once CI and the review are done, novice posts a one-line summary (CI, review, lines changed, flagged files, docs, how many done conditions the reviewer couldn't verify). When it stops on a PR instead of merging it, it adds the `needs-brad` label with the reason: the review blocked or CI failed after the automatic revision, Brad's revisions are used up, or auto-merge is off, paused or failed.
 - novice labels each agent PR by size (`size:S` under 30 changed lines, `size:M` under 100, `size:L` up to 300, `size:XL` over) and by trust: `vouch:unvouched` until Brad sets `vouched=1` in the repo's settings, then `vouch:trusted`. Brad's own PRs get `vouch:trusted`. Vouching changes only the label. `lib/tower.sh` lists every label tower uses.
 - A failed CI run is rerun once before it counts. If the rerun passes, the summary and log name the flaky test.
 - novice skips an issue while a "Blocked by #N" (or `OWNER/NAME#N`) line in its body names an open issue. An issue it tried runs again once it's edited or a blocker is closed as completed. When a worker stops because a sibling needs changing first, novice opens the issue it drafted there as `proposed` and treats it as a blocker.
 - Each run fills in log.md's "Brad stepped in" for agent PRs merged or closed since (auto-merged, merged as-is, merged after a fix with Brad's commit subjects, or closed with his last comment), and "After merge" for a revert on main or an issue saying "Broken by #N", or "none" after 7 days without one. It never overwrites what Brad wrote, and it says in the journal when a repository has 10 clean merges.
-- Where Brad has set `vouched=1` and `automerge=1`, novice labels a PR `automerge` when it's size S or M, touches no flagged files, safety code or docs, passed CI the first time, and passed review with nothing unverified, and merges it an hour later unless Brad removes the label or requests changes. If CI then fails on main, it opens a revert PR, labels it `needs-brad`, and pauses auto-merge on that repository until Brad removes `~/novices/state/NAME/automerge-paused`. `tower add-repo` drops the ruleset's required approval only on such a repository.
+- Where `automerge=1` (every repository unless its settings say 0), novice labels a PR `automerge` and merges it as soon as CI passes (a flaky test's rerun counts) and the review finds nothing blocking. Size up to `max_lines`, flagged files, docs and unverified done conditions don't hold it back; the reviewer blocks a change to flagged files the issue didn't ask for, and one that weakens a check. If CI then fails on main, novice opens a revert PR, labels it `needs-brad`, and pauses auto-merge on that repository until Brad removes `~/novices/state/NAME/automerge-paused`. `tower add-repo` drops the ruleset's required approval on such a repository. `AUTOMERGE_DELAY` in `bin/novice` (0 minutes) sets how long the label stays on before the merge, a window for Brad to remove it.
 - novice starts only issues whose `agent` label Brad applied. It skips an issue that names safety code, and won't push a change that touches it, unless Brad has added `safety-ok`.
-- Diffs over 300 changed lines (`max_lines` in `lib/tower.sh`, lockfiles not counted) aren't opened, pushed or reviewed. The issue needs splitting.
+- Diffs adding over 300 lines (`max_lines` in `lib/tower.sh`, lockfiles not counted) aren't opened, pushed or reviewed. Removed lines don't count. The issue needs splitting, unless Brad adds `big-ok` to it; adding the label to an issue already refused runs it again.
 
 ## Layout
 

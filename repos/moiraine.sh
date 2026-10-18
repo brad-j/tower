@@ -20,4 +20,4 @@ unprovable='(\.md$|\.css$)'
 uncounted+=(src/routeTree.gen.ts)
 
 vouched=0
-automerge=0
+automerge=1

@@ -5,7 +5,7 @@ How to get tower running on a Linux machine, as it runs on egwene (CachyOS). Aft
 ## What runs where
 
 - On the host, as Brad's user: `bin/novice`, `bin/review-pr` and `bin/tower`. They run git and gh, and push.
-- In `bin/sandbox` (bubblewrap): each repository's install and check, and the worker. The sandbox sees an empty home, Node from `~/.local/share/pi-node/current`, `/usr` and `/etc` read-only, the repository's clone, and whatever the repository's `sandbox_ro` and `siblings` add.
+- In `bin/sandbox` (bubblewrap): each repository's install and check, the worker, and `bin/draft`'s model. The sandbox sees an empty home, Node from `~/.local/share/pi-node/current`, `/usr` and `/etc` read-only, the repository's clone, and whatever the repository's `sandbox_ro` and `siblings` add.
 - The worker is the Claude Code inside the sandbox, from pi-node, logged in with its own long-lived token. The reviewer is the host's Claude Code (`~/.local/bin/claude`) with Brad's own Claude login, run with no tools in an empty directory. On egwene these are two installs and can be different versions (2.1.288 and 2.1.302 as of 2026-10-17).
 
 ## 1. Packages
@@ -120,7 +120,7 @@ loginctl enable-linger $USER    # keeps them running while logged out; already o
 - Pause a repository: `systemctl --user stop tower@NAME.timer` (until the next login or reboot) or `disable --now` (until it's enabled again).
 - A new repository's timer: `systemctl --user enable --now tower@NAME.timer`, after its first run by hand.
 - After changing `systemd/tower@.timer`: `systemctl --user daemon-reload`, then `systemctl --user restart tower@NAME.timer` for each enabled timer.
-- Limits, in `bin/novice` and `bin/review-pr`: 25 worker runs a day per repository, Sonnet 5.5 at medium effort for the worker and Opus 5.5 at high effort for the reviewer, $3 and 30 minutes per worker run, $0.75 and 10 minutes per review, one agent PR open at a time, diffs up to 300 lines.
+- Limits, in `bin/novice` and `bin/review-pr`: 25 worker runs a day per repository, Sonnet 5.5 at medium effort for the worker and Opus 5.5 at high effort for the reviewer, $3 and 30 minutes per worker run, $0.75 and 10 minutes per review, one agent PR open at a time, diffs adding up to 300 lines unless the issue has `big-ok`. `bin/draft` uses Sonnet 5.5 at medium effort, with $1 and 15 minutes per batch.
 
 ## Where things are kept
 

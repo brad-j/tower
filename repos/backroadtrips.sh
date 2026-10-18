@@ -26,4 +26,4 @@ uncounted+=(netlify/database/migrations/)
 public=0
 
 vouched=0
-automerge=0
+automerge=1

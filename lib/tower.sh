@@ -8,7 +8,8 @@ owner=brad-j
 agent=brads-agents
 agent_email=344078136+brads-agents@users.noreply.github.com
 agent_token=$HOME/.config/gh-agents/token
-# Bigger diffs aren't opened, pushed or reviewed; the issue gets split instead.
+# Diffs adding more lines than this (deletions don't count) aren't opened, pushed or reviewed unless Brad labels the
+# issue big-ok; otherwise the issue gets split.
 max_lines=300
 # A merged PR with no problem found after this many days gets "none" in log.md's After merge column.
 quiet_days=7
@@ -18,14 +19,15 @@ labels=(
 	"agent|5319E7|Ready for an agent to work on"
 	"proposed|C5DEF5|Drafted by a model for Brad to read; he promotes it to agent or closes it"
 	"safety-ok|B60205|Brad allows an agent to change safety code for this issue"
-	"needs-brad|D876E3|Brad reads this PR closely: flagged files, safety code, docs, or something a test can't prove"
+	"big-ok|B60205|Brad allows an agent change over the 300 added-line limit for this issue"
+	"needs-brad|D876E3|The loop stopped here for Brad: the review blocked, CI failed, or it can't auto-merge"
 	"size:S|0E8A16|Under 30 changed lines, lockfiles not counted"
 	"size:M|FBCA04|30 to 99 changed lines, lockfiles not counted"
 	"size:L|D93F0B|100 to 300 changed lines, lockfiles not counted"
-	"size:XL|B60205|Over 300 changed lines: over the limit, split it"
+	"size:XL|B60205|Over 300 changed lines, lockfiles not counted"
 	"vouch:trusted|0E8A16|Written by Brad, or by the agent on a repo where Brad has vouched for it"
 	"vouch:unvouched|FBCA04|Written by the agent before it has earned trust on this repo: read with more care"
-	"automerge|0E8A16|novice merges this when its waiting time is up; Brad removes the label to stop it"
+	"automerge|0E8A16|CI and the review passed, so novice merges this; Brad removes the label to stop it"
 )
 
 # The names in labels, space-separated.
@@ -92,12 +94,12 @@ settings_defaults() {
 	# Mounted read-only in the sandbox, besides Node, the clone and the siblings: pnpm's store and Playwright's browsers.
 	sandbox_ro=("$HOME/.local/share/pnpm/store" "$HOME/.cache/ms-playwright")
 	# Files that steer CI, agents, dependencies or the checks, as paths or path prefixes. A PR touching them, or the safety
-	# code, gets a warning at the top and the needs-brad label. They make up flagged, an extended regex over the diff's
-	# file names, unless the file sets flagged itself.
+	# code, gets a warning at the top, and the reviewer blocks a change to them the issue didn't ask for. They make up
+	# flagged, an extended regex over the diff's file names, unless the file sets flagged itself.
 	flagged_paths=(.github/ AGENTS.md CLAUDE.md package.json pnpm-lock.yaml pnpm-workspace.yaml)
 	unset flagged
-	# Files whose claims or look a test can't prove (an extended regex), usually docs and styles. A PR touching them gets
-	# the needs-brad label.
+	# Files whose claims or look a test can't prove (an extended regex), usually docs and styles. The PR's summary names
+	# them.
 	unprovable='(\.md$|^docs/)'
 	# Left out of the line count for the size limit: lockfiles and generated files.
 	uncounted=(pnpm-lock.yaml)
@@ -107,9 +109,9 @@ settings_defaults() {
 	# Brad sets vouched=1 once log.md shows about 10 merged PRs with nothing found after merge. It only changes the
 	# agent's PRs from vouch:unvouched to vouch:trusted; every check and label still applies.
 	vouched=0
-	# Brad sets automerge=1, with vouched=1, to let novice merge small PRs that pass everything after a waiting time he
-	# can stop by removing the automerge label. tower add-repo then drops the ruleset's required approval on the repo.
-	automerge=0
+	# 1: novice merges an agent PR once CI and the review pass, and Brad is brought in only when they don't. tower
+	# add-repo drops the ruleset's required approval on the repo. 0: every agent PR waits for Brad's approval.
+	automerge=1
 }
 
 # The extended regex matching file names under any of the paths given.
@@ -154,11 +156,24 @@ refresh_siblings() {
 	done
 }
 
-# Lines added plus lines removed between origin/main and REF, leaving out the uncounted files (lockfiles). Run in the clone.
-diff_lines() {
+# git diff --numstat between origin/main and REF, leaving out the uncounted files (lockfiles). Run in the clone.
+counted_numstat() {
 	local excludes=() path
 	for path in "${uncounted[@]}"; do excludes+=(":(exclude)$path"); done
-	git diff --numstat "origin/main...$1" -- . "${excludes[@]}" | awk '{ n += $1 + $2 } END { print n + 0 }'
+	git diff --numstat "origin/main...$1" -- . "${excludes[@]}"
+}
+
+# Lines added plus lines removed, for the size label and the PR's summary.
+diff_lines() { counted_numstat "$1" | awk '{ n += $1 + $2 } END { print n + 0 }'; }
+
+# Lines added, which max_lines limits, so removing code never counts against it.
+added_lines() { counted_numstat "$1" | awk '{ n += $1 } END { print n + 0 }'; }
+
+# Whether issue or PR $1 has the label $2 and Brad was the last to apply it. Only he labels issues agent, safety-ok or
+# big-ok.
+labeled_by_owner() {
+	gh issue view -R "$repo" "$1" --json labels -q '.labels[].name' | grep -qxF "$2" || return 1
+	[ "$(gh api --paginate "repos/$repo/issues/$1/events" -q '.[] | select(.event == "labeled" and .label.name == "'"$2"'") | .actor.login' | tail -1)" = "$owner" ]
 }
 
 # Of the file names on stdin, the ones in the safety code.

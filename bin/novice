@@ -8,10 +8,11 @@
 # Limits: one agent PR open at a time; RUNS_PER_DAY worker runs a day; on each PR one automatic revision (a failed CI
 # run or a blocking review) and up to BRAD_REVISIONS more, each started by Brad choosing "Request changes" on the PR.
 # A failed CI run is rerun once before it counts, and a test that passes on the rerun is reported as flaky.
-# A change over max_lines (lib/tower.sh) isn't opened or pushed; the issue needs splitting. When it's Brad's turn on a
-# PR, the loop leaves a one-line summary and labels it needs-brad if he has to read it closely. Where Brad has set
-# vouched=1 and automerge=1, a small PR that passes everything is labeled automerge and merged AUTOMERGE_DELAY minutes
-# later unless he removes the label; if main's CI then fails, the loop opens a revert and stops auto-merging there.
+# A change adding over max_lines lines (lib/tower.sh) isn't opened or pushed unless Brad labels the issue big-ok; the
+# issue needs splitting. Once CI and the review are
+# done, the loop leaves a one-line summary. Where automerge=1, a PR whose CI and review passed is labeled automerge and
+# merged AUTOMERGE_DELAY minutes later unless Brad removes the label; if main's CI then fails, the loop opens a revert
+# and stops auto-merging there. Otherwise it's Brad's turn, and the PR gets the needs-brad label.
 # An issue with an open "Blocked by" issue waits. A tried issue runs again once it's edited or a blocker is completed.
 # Each run fills in log.md's "Brad stepped in" for PRs merged or closed since, and "After merge" for reverts on main
 # and issues saying "Broken by #N", or "none" after quiet_days (lib/tower.sh).
@@ -28,8 +29,8 @@ model=claude-sonnet-5-5
 budget=3
 RUNS_PER_DAY=25
 BRAD_REVISIONS=2
-# Minutes between labeling a PR automerge and merging it, Brad's time to remove the label.
-AUTOMERGE_DELAY=60
+# Minutes between labeling a PR automerge and merging it, Brad's time to remove the label. At 0 it merges at once.
+AUTOMERGE_DELAY=0
 # What the PR's review check says from the push until the reviewer starts, so it doesn't read as waiting on Brad.
 review_waiting="Automated reviewer: runs once CI finishes, not Brad's review"
 denied=("Bash(git push*)" "Bash(gh *)" "Bash(git remote*)" "Bash(git config*)" "Bash(curl *)")
@@ -292,6 +293,7 @@ retry_reason() {
 	local marked completed
 	if [ ! -f "$state/body-$1" ]; then [ "$dry_run" = 1 ] || issue_hash "$1" > "$state/body-$1"
 	elif [ "$(issue_hash "$1")" != "$(cat "$state/body-$1")" ]; then echo "it's been edited since"; return; fi
+	if grep -q '^too big' "$state/issue-$1" && labeled_by_owner "$1" big-ok; then echo "$owner labeled it big-ok"; return; fi
 	marked=$(stat -c %Y "$state/issue-$1")
 	completed=$(awk -v t="$marked" '$2 == "closed" && $3 == "completed" && $4 > t { print $1 }' <<< "$2" | paste -sd, | sed 's/,/, /g')
 	[ -z "$completed" ] || echo "$completed was completed since"
@@ -319,12 +321,6 @@ sibling_issue() {
 review_comment() { gh pr view -R "$repo" "$1" --json comments -q '[.comments[] | select(.author.login == "'$agent'") | select(.body | contains("head='"$2"'"))] | last | .body // ""'; }
 
 pr_state() { gh pr view -R "$repo" "$1" --json state -q .state; }
-
-# Whether issue or PR $1 has the label $2 and Brad was the last to apply it. Only he labels issues agent or safety-ok.
-labeled_by_owner() {
-	gh issue view -R "$repo" "$1" --json labels -q '.labels[].name' | grep -qxF "$2" || return 1
-	[ "$(gh api --paginate "repos/$repo/issues/$1/events" -q '.[] | select(.event == "labeled" and .label.name == "'"$2"'") | .actor.login' | tail -1)" = "$owner" ]
-}
 
 # Comments BODY on issue $1 once: not again while an earlier comment of the agent's carries the marker for KEY $2.
 note_once() {
@@ -361,11 +357,11 @@ pr_facts() {
 	fi
 }
 
-# Ends the loop's turn on PR $1 at head $2 (CI $3, review $4): a one-line summary comment, once for each head and outcome,
-# and the needs-brad label when it touches flagged files or safety code, changes files a test can't prove (docs), or the
-# reviewer listed done conditions it couldn't verify. A head without those loses the label.
+# Ends the loop's turn on PR $1 at head $2 (CI $3, review $4): a one-line summary comment, once for each head and
+# outcome, naming flagged files, safety code, docs and the done conditions the reviewer couldn't verify. With a reason
+# $5 it's Brad's turn, and the PR gets the needs-brad label; without one it's auto-merging, and loses the label.
 summarize() {
-	local pr=$1 head=$2 ci=$3 verdict=$4 marker parts=() reasons=()
+	local pr=$1 head=$2 ci=$3 verdict=$4 why=${5:-} marker parts=()
 	marker="<!-- tower summary head=$head ci=${ci%% *} review=$verdict -->"
 	if gh pr view -R "$repo" "$pr" --json comments -q '.comments[] | select(.author.login == "'$agent'") | .body' | grep -qF "$marker"; then
 		return 0
@@ -376,21 +372,22 @@ summarize() {
 	flaky=$(flaky_tests "$head" "$ci")
 	case ${ci%% *} in
 		success) if [ -n "$flaky" ]; then parts+=("CI passed on a rerun (flaky: $flaky)"); else parts+=("CI passed"); fi ;;
+		missing) parts+=("no CI run") ;;
 		*) parts+=("CI failed") ;;
 	esac
 	case $verdict in pass) parts+=("review passed") ;; block) parts+=("review blocked") ;; *) parts+=("review didn't run") ;; esac
 	parts+=("$lines lines")
-	if [ -n "$flagged_list" ]; then parts+=("flagged: $flagged_list"); reasons+=("flagged files"); else parts+=("no flagged files"); fi
-	if [ -n "$unprovable_list" ]; then parts+=("tests can't prove: $unprovable_list"); reasons+=("docs"); fi
-	if [ "$unverified" -gt 0 ]; then parts+=("Unverified: $unverified (see the review)"); reasons+=("unverified done conditions"); else parts+=("Unverified: none"); fi
+	if [ -n "$flagged_list" ]; then parts+=("flagged: $flagged_list"); else parts+=("no flagged files"); fi
+	if [ -n "$unprovable_list" ]; then parts+=("tests can't prove: $unprovable_list"); fi
+	if [ "$unverified" -gt 0 ]; then parts+=("Unverified: $unverified (see the review)"); else parts+=("Unverified: none"); fi
 
 	local body
 	body=$(join " · " "${parts[@]}")
-	if [ "${#reasons[@]}" -gt 0 ]; then
+	if [ -n "$why" ]; then
 		gh api -X POST "repos/$repo/issues/$pr/labels" -f 'labels[]=needs-brad' > /dev/null
 		body="$body
 
-Labeled needs-brad ($(join ", " "${reasons[@]}")): read those parts before approving."
+Labeled needs-brad: $why."
 	else
 		gh api -X DELETE "repos/$repo/issues/$pr/labels/needs-brad" > /dev/null 2>&1 || true
 	fi
@@ -399,25 +396,24 @@ $marker" > /dev/null
 	say "summary: $(head -1 <<< "$body")"
 }
 
-# Why PR $1 at head $2 (CI $3, review $4) can't be auto-merged, or nothing if it can: small (size S or M), no flagged
-# files, safety code or docs, CI passed the first time, the review passed with nothing unverified.
+# Why PR $1 at head $2 (CI $3, review $4) won't be auto-merged, or nothing if it will: auto-merge is on and not paused
+# on the repo or stopped on the PR, CI passed (a flaky test's rerun counts), and the review passed. Size, flagged files,
+# docs and unverified done conditions are the reviewer's call.
 automerge_blocker() {
-	[ "${3%% *}" = success ] && [ ! -f "$state/rerun-$2" ] || { echo "CI didn't pass the first time"; return; }
-	[ "$4" = pass ] || { echo "the review didn't pass"; return; }
-	pr_facts "$1" "$2"
-	if [ "$lines" -ge 100 ]; then echo "$lines lines"
-	elif [ -n "$flagged_list" ]; then echo "flagged: $flagged_list"
-	elif [ -n "$unprovable_list" ]; then echo "docs: $unprovable_list"
-	elif [ "$unverified" -gt 0 ]; then echo "$unverified unverified"; fi
+	if [ "$automerge" != 1 ]; then echo "auto-merge is off on $repo_name, so it waits for Brad's approval"
+	elif [ -f "$state/automerge-paused" ]; then echo "auto-merge is paused here: $(cat "$state/automerge-paused")"
+	elif [ "$(cat "$state/automerge-$1" 2> /dev/null)" = stopped ]; then echo "auto-merge was stopped on this PR"
+	elif [ "${3%% *}" != success ]; then echo "CI didn't pass"
+	elif [ "$4" != pass ]; then echo "the review didn't pass"; fi
 }
 
-# Where Brad has set vouched=1 and automerge=1, labels PR $1 at head $2 (CI $3, review $4) automerge if it qualifies,
-# and merges it AUTOMERGE_DELAY minutes after the label went on that head. Brad removing the label stops it for good on
-# this PR. After a merge, waits for CI on main; if it fails, opens a revert and stops auto-merging on the repo.
-# Returns 0 if it merged (step again), 1 otherwise. state/automerge-PR holds "HEAD SECONDS", or "stopped".
+# Where automerge=1, labels PR $1 at head $2 (CI $3, review $4) automerge if it qualifies, and merges it
+# AUTOMERGE_DELAY minutes after the label went on that head. Brad removing the label, or a merge that fails, stops it
+# for good on this PR. After a merge, waits for CI on main; if it fails, opens a revert and stops auto-merging on the
+# repo. Returns 0 if it merged (step again), 1 otherwise. state/automerge-PR holds "HEAD SECONDS", or "stopped".
 automerge_step() {
-	local pr=$1 head=$2 why file=$state/automerge-$1 at labeled now merge ci
-	[ "$automerge" = 1 ] && [ "$vouched" = 1 ] || return 1
+	local pr=$1 head=$2 why file=$state/automerge-$1 at labeled now merge ci when
+	[ "$automerge" = 1 ] || return 1
 	if [ -f "$state/automerge-paused" ]; then say "auto-merge is paused here: $(cat "$state/automerge-paused")"; return 1; fi
 	[ "$(cat "$file" 2> /dev/null)" != stopped ] || return 1
 	labeled=$(gh pr view -R "$repo" "$pr" --json labels -q '[.labels[].name] | index("automerge") != null')
@@ -434,13 +430,22 @@ automerge_step() {
 		if [ -f "$file" ]; then echo stopped > "$file"; say "Brad removed automerge from PR #$pr; leaving it to him"; return 1; fi
 		gh api -X POST "repos/$repo/issues/$pr/labels" -f 'labels[]=automerge' > /dev/null
 		echo "$head $now" > "$file"
-		gh pr comment -R "$repo" "$pr" --body "Auto-merging at $(date -d "@$((now + AUTOMERGE_DELAY * 60))" '+%H:%M %Z'): it passed everything and is small, with no flagged files, safety code or docs. Remove the \`automerge\` label to stop it, or request changes." > /dev/null
-		say "labeled PR #$pr automerge; merging in $AUTOMERGE_DELAY minutes"
-		return 1
+		if [ "$AUTOMERGE_DELAY" = 0 ]; then
+			gh pr comment -R "$repo" "$pr" --body "Auto-merging now: CI passed and the review found nothing blocking." > /dev/null
+		else
+			when=$(date -d "@$((now + AUTOMERGE_DELAY * 60))" '+%H:%M %Z')
+			gh pr comment -R "$repo" "$pr" --body "Auto-merging at $when: CI passed and the review found nothing blocking. Remove the \`automerge\` label to stop it, or request changes." > /dev/null
+			say "labeled PR #$pr automerge; merging in $AUTOMERGE_DELAY minutes"
+			return 1
+		fi
 	fi
 	read -r at labeled < "$file" || { at="" labeled=0; }
 	# A new head restarts the wait.
-	if [ "$at" != "$head" ]; then echo "$head $now" > "$file"; say "new head on PR #$pr; the auto-merge wait starts again"; return 1; fi
+	if [ "$at" != "$head" ]; then
+		echo "$head $now" > "$file"
+		labeled=$now
+		if [ "$AUTOMERGE_DELAY" != 0 ]; then say "new head on PR #$pr; the auto-merge wait starts again"; return 1; fi
+	fi
 	if [ $((now - labeled)) -lt $((AUTOMERGE_DELAY * 60)) ]; then
 		say "PR #$pr auto-merges at $(date -d "@$((labeled + AUTOMERGE_DELAY * 60))" +%H:%M) unless Brad removes the label"
 		return 1
@@ -448,6 +453,11 @@ automerge_step() {
 	if ! gh pr merge -R "$repo" "$pr" --merge --match-head-commit "$head" > "$work/merge.log" 2>&1; then
 		say "auto-merging PR #$pr failed: $(head -c 300 "$work/merge.log")"
 		echo stopped > "$file"
+		gh api -X POST "repos/$repo/issues/$pr/labels" -f 'labels[]=needs-brad' > /dev/null
+		gh pr comment -R "$repo" "$pr" --body "**Auto-merge failed**, so this is over to $owner. Labeled needs-brad.
+~~~
+$(head -c 1000 "$work/merge.log")
+~~~" > /dev/null
 		return 1
 	fi
 	rm -f "$file"
@@ -483,7 +493,7 @@ revert_merge() {
 
 # One step on the open PR. Returns 0 if it pushed a revision (step again), 1 if it's Brad's turn.
 step_pr() {
-	local pr=$1 branch=$2 head=$3 issue ci verdict review_id feedback="" kind=""
+	local pr=$1 branch=$2 head=$3 issue ci verdict why review_id feedback="" kind=""
 	issue=$(gh pr view -R "$repo" "$pr" --json closingIssuesReferences -q '.closingIssuesReferences[0].number // empty')
 	[ -n "$issue" ] || { say "PR #$pr doesn't close an issue, so it can't be reviewed or revised; over to Brad"; return 1; }
 	say "PR #$pr (issue #$issue) at ${head:0:7}"
@@ -517,13 +527,16 @@ step_pr() {
 
 	# Brad can merge or close it while CI or the reviewer runs.
 	if [ "$(pr_state "$pr")" != OPEN ]; then say "PR #$pr is $(pr_state "$pr") now; moving on"; return 0; fi
-	if [ "$ci" = missing ]; then say "no CI run appeared for ${head:0:7}; over to Brad"; return 1; fi
+	if [ "$ci" = missing ]; then
+		[ "$dry_run" = 1 ] || summarize "$pr" "$head" "$ci" "$verdict" "no CI run appeared for this head"
+		say "no CI run appeared for ${head:0:7}; over to Brad"; return 1
+	fi
 
 	# Brad's "Request changes" since the last one handled comes first.
 	review_id=$(gh api "repos/$repo/pulls/$pr/reviews" -q '[.[] | select(.user.login == "'$owner'" and .state == "CHANGES_REQUESTED")] | last | .id // empty')
 	if [ -n "$review_id" ] && [ "$review_id" != "$(cat "$state/pr-$pr.brad-handled" 2>/dev/null)" ]; then
 		if [ "$(count "pr-$pr.brad-revisions")" -ge "$BRAD_REVISIONS" ]; then
-			[ "$dry_run" = 1 ] || summarize "$pr" "$head" "$ci" "$verdict"
+			[ "$dry_run" = 1 ] || summarize "$pr" "$head" "$ci" "$verdict" "Brad asked for changes, and his $BRAD_REVISIONS revisions are used up"
 			say "Brad asked for changes, but this PR has had its $BRAD_REVISIONS revisions for him; over to Brad"; return 1
 		fi
 		kind=brad
@@ -532,7 +545,7 @@ $(gh api "repos/$repo/pulls/$pr/reviews/$review_id" -q .body)
 $(gh api "repos/$repo/pulls/$pr/reviews/$review_id/comments" -q '.[] | "\n- \(.path) line \(.line // .original_line): \(.body)"')"
 	elif [ "$ci" != success ] || [ "$verdict" = block ]; then
 		if [ "$(count "pr-$pr.auto-revisions")" -ge 1 ]; then
-			[ "$dry_run" = 1 ] || summarize "$pr" "$head" "$ci" "$verdict"
+			[ "$dry_run" = 1 ] || summarize "$pr" "$head" "$ci" "$verdict" "still CI ${ci%% *}, review $verdict after the automatic revision"
 			say "still CI $ci, review $verdict after the automatic revision; over to Brad"; return 1
 		fi
 		kind=auto
@@ -551,10 +564,12 @@ It saw only the issue, the diff and the description, and it can be wrong. Act on
 $(review_comment "$pr" "$head")"
 		fi
 	else
-		[ "$dry_run" = 1 ] && { say "CI passed and the review didn't block; Brad's turn"; return 1; }
-		summarize "$pr" "$head" "$ci" "$verdict"
+		why=$(automerge_blocker "$pr" "$head" "$ci" "$verdict")
+		[ "$dry_run" = 1 ] && { say "CI passed and the review didn't block; ${why:-would auto-merge}"; return 1; }
+		summarize "$pr" "$head" "$ci" "$verdict" "$why"
 		automerge_step "$pr" "$head" "$ci" "$verdict" && return 0
-		say "CI passed and the review didn't block; waiting for Brad to approve and merge, or request changes"; return 1
+		[ -n "$why" ] || why="waiting to auto-merge"
+		say "CI passed and the review didn't block; $why"; return 1
 	fi
 
 	[ "$dry_run" = 1 ] && { say "would revise PR #$pr ($kind)"; return 1; }
@@ -576,12 +591,12 @@ $(review_comment "$pr" "$head")"
 	} > "$work/prompt.md"
 	worker "$work/prompt.md"
 	if [ "$kind" = brad ]; then bump "pr-$pr.brad-revisions"; echo "$review_id" > "$state/pr-$pr.brad-handled"; else bump "pr-$pr.auto-revisions"; fi
-	local lines too_big="" new_safety
-	lines=$(diff_lines HEAD)
-	if [ "$lines" -gt "$max_lines" ]; then
+	local added too_big="" new_safety
+	added=$(added_lines HEAD)
+	if [ "$added" -gt "$max_lines" ] && ! labeled_by_owner "$issue" big-ok; then
 		too_big="
 
-Not pushed: with this revision the PR comes to $lines changed lines, over the $max_lines-line limit. It stays local on \`$branch\` in the agents' clone. Split the issue."
+Not pushed: with this revision the PR adds $added lines, over the $max_lines-line limit. It stays local on \`$branch\` in the agents' clone. Split the issue, or add the \`big-ok\` label to it."
 	fi
 	# Safety code this revision brings into the PR, without Brad's safety-ok on the issue.
 	new_safety=$(comm -13 <(git diff --name-only "origin/main...$head" | safety_files | sort) <(git diff --name-only origin/main...HEAD | safety_files | sort) | paste -sd, | sed 's/,/, /g')
@@ -609,7 +624,7 @@ $(result)$too_big" > /dev/null
 
 # Starts the oldest open agent issue that hasn't been tried. Returns 0 if it opened a PR, 1 otherwise.
 start_issue() {
-	local issue title branch pr touchy lines
+	local issue title branch pr touchy added
 	issue=""
 	local named blockers why waiting
 	for n in $(gh issue list -R "$repo" --label agent --state open --json number -q 'sort_by(.number) | .[].number'); do
@@ -679,15 +694,15 @@ $(result)" > /dev/null
 		say "touched safety code ($touched_safety) without safety-ok; no PR, commented on #$issue"
 		return 1
 	fi
-	lines=$(diff_lines HEAD)
-	if [ "$lines" -gt "$max_lines" ]; then
-		gh issue comment -R "$repo" "$issue" --body "**The change came to $lines changed lines, over the $max_lines-line limit, so there's no PR.** It stays local on \`$branch\` in the agents' clone. Split this issue into smaller ones. The agent's notes:
+	added=$(added_lines HEAD)
+	if [ "$added" -gt "$max_lines" ] && ! labeled_by_owner "$issue" big-ok; then
+		gh issue comment -R "$repo" "$issue" --body "**The change adds $added lines, over the $max_lines-line limit, so there's no PR.** It stays local on \`$branch\` in the agents' clone. Split this issue into smaller ones, or add the \`big-ok\` label and it runs again as one PR. The agent's notes:
 
 $(result)" > /dev/null
-		mark_tried "$issue" "too big ($lines lines), $(date +%F)"
-		jq -r --arg date "$(date +%F)" --arg what "#$issue $title" --arg name "$repo_name" --arg lines "$lines" \
-			'"| \($date) | \($name) | \($what) | none, \($lines) lines | sonnet-5.5 medium | \(.num_turns) | $\(.total_cost_usd * 100 | round / 100) | | | | |"' "$work/worker.json" | log_add "#$issue, no PR, $lines lines"
-		say "$lines lines, over $max_lines; no PR, commented on #$issue"
+		mark_tried "$issue" "too big ($added lines added), $(date +%F)"
+		jq -r --arg date "$(date +%F)" --arg what "#$issue $title" --arg name "$repo_name" --arg added "$added" \
+			'"| \($date) | \($name) | \($what) | none, \($added) lines added | sonnet-5.5 medium | \(.num_turns) | $\(.total_cost_usd * 100 | round / 100) | | | | |"' "$work/worker.json" | log_add "#$issue, no PR, $added lines added"
+		say "$added lines added, over $max_lines; no PR, commented on #$issue"
 		return 1
 	fi
 	touchy=$(git diff --name-only origin/main...HEAD | flagged_files | paste -sd, | sed 's/,/, /g')

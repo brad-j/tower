@@ -2,14 +2,14 @@
 
 What only Brad does. Everything else is tower's job.
 
-## When the loop stops on a PR
+## When a PR has `needs-brad`
 
-- Read the summary comment at the bottom of the PR.
-- If it has `needs-brad`, read the parts it names: flagged files, safety code, docs, or the done conditions the reviewer couldn't verify.
-- Approve and merge, or choose "Request changes" with what to fix. The agent gets two revisions for you per PR.
+PRs whose CI and review pass merge themselves. The loop stops on a PR and labels it `needs-brad` only when the review blocked or CI failed even after the agent's automatic revision, when your revisions on it are used up, or when auto-merge is off, paused or failed. Filter on the label to find them.
+
+- Read the summary comment at the bottom of the PR. Its last line says why it stopped.
+- Merge (with your admin bypass if the `review` check failed), close it, or choose "Request changes" with what to fix. The agent gets two revisions for you per PR, and a revised PR that passes merges itself.
 - Don't bypass a pending or failed `review` check unless you mean to.
 - The timer runs `bin/novice NAME` within about 2 minutes of anything you do on GitHub.
-- An `automerge` label means novice merges it an hour after the label went on. Remove the label to keep it for yourself; requesting changes also stops it.
 
 ## After merging
 
@@ -24,11 +24,12 @@ What only Brad does. Everything else is tower's job.
 - An issue that has to wait for another gets a line "Blocked by #N", or `brad-j/NAME#N` for another repository. novice also opens a `proposed` issue on a sibling when a worker finds it needs that first.
 - `bin/draft NAME "what you want"` opens `proposed` issues. Read them, then swap `proposed` for `agent` on the ones you want, or close them.
 - An issue that names safety code waits until you add `safety-ok`. Add it only when you mean an agent to change that code, and read those PRs closely.
+- An issue whose change adds over 300 lines gets no PR. Split it, or add `big-ok` if it belongs in one PR; the issue runs again.
 
 ## Now and then
 
 - Read `log.md`. A repository with about 10 clean merges can be vouched for: set `vouched=1` in `repos/NAME.sh`. novice says so in its journal when the log shows 10.
-- To let novice merge small PRs on a vouched repository, set `automerge=1` too, then run `tower add-repo NAME` and `--apply` to drop the ruleset's required approval. To turn it off, set `automerge=0` and run it again.
+- To approve every PR on a repository yourself, set `automerge=0` in `repos/NAME.sh`, then run `tower add-repo NAME` and `--apply` to require an approval again. Set it back to 1 and run it again to return to auto-merge.
 - After CI fails on main following an auto-merge: merge or fix the revert PR, which needs your admin bypass for `review`, then remove `~/novices/state/NAME/automerge-paused`.
 - Approve each new repository's GitHub setup when `tower add-repo` shows its plan.
 - To stop the agents on a repository: `systemctl --user disable --now tower@NAME.timer`.

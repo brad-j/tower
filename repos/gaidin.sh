@@ -10,4 +10,4 @@ safety_paths=(src/sandbox.ts src/guards.ts src/approvals.ts src/rules.ts src/red
 	src/browser/ src/self/ src/connectors/)
 
 vouched=0
-automerge=0
+automerge=1

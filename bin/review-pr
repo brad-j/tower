@@ -67,9 +67,11 @@ $revisions"
 fi
 git diff -U20 "origin/main...$head" > "$work/diff"
 size=$(wc -c < "$work/diff")
-lines=$(diff_lines "$head")
+added=$(added_lines "$head")
 [ "$size" -gt 0 ] || stop error "the diff is empty"
-[ "$lines" -le "$max_lines" ] || stop failure "$lines changed lines, over the $max_lines-line limit: split it"
+if [ "$added" -gt "$max_lines" ] && ! labeled_by_owner "$issue" big-ok; then
+	stop failure "$added lines added, over the $max_lines-line limit: split it, or label #$issue big-ok"
+fi
 [ "$size" -le "$max_diff_bytes" ] || stop failure "the diff is $size bytes, over $max_diff_bytes: split it"
 gh issue view -R "$repo" "$issue" --json title,body -q '"# Issue #'"$issue"': " + .title + "\n\n" + .body' > "$work/issue.md"
 
@@ -88,7 +90,7 @@ ci_summary() {
 }
 if [ -n "$pr" ]; then ci=$(ci_summary "$head"); else ci="None: a local commit, not pushed, so the check passing is unverified."; fi
 
-system='You review pull requests adversarially. An agent wrote this one to resolve the issue you are given. Your job is to find the reasons it should not be merged, before a human spends time on it. Assume it is wrong until the diff shows otherwise. You are not here to encourage anyone.
+system='You review pull requests adversarially. An agent wrote this one to resolve the issue you are given. Your job is to find the reasons it should not be merged. No human reads it before it merges: a pass from you merges it. Assume it is wrong until the diff shows otherwise. You are not here to encourage anyone.
 
 Check:
 1. Each "Done when" condition in the issue. Met, not met, or not something the diff and CI can show: say which. When CI
@@ -103,6 +105,13 @@ if [ "$public" = 1 ]; then
 	n=$((n + 1))
 	system="$system
 $n. This repository is public. Real host names, LAN or tailnet addresses, people, Slack IDs, home paths or secrets in the diff."
+fi
+# Flagged files in this diff, which Brad no longer reads himself before a merge.
+flagged_here=$(git diff --name-only "origin/main...$head" | grep -E "$flagged" | paste -sd, | sed 's/,/, /g' || true)
+if [ -n "$flagged_here" ]; then
+	n=$((n + 1))
+	system="$system
+$n. Files that steer CI, agents, dependencies or the checks: $flagged_here. Any change there the issue did not ask for blocks, and so does any change that weakens or skips a check, test or build step."
 fi
 if [ "${#safety_paths[@]}" -gt 0 ]; then
 	n=$((n + 1))
@@ -159,7 +168,7 @@ esac
 comment="$review
 
 ---
-<sub>Adversarial review by a model with no tools that saw only issue #$issue, this PR's description, its diff and CI's result (Opus 5.5, est. \$$cost). A human decides.</sub>
+<sub>Adversarial review by a model with no tools that saw only issue #$issue, this PR's description, its diff and CI's result (Opus 5.5, est. \$$cost). Where auto-merge is on, a passing review lets the PR merge.</sub>
 <!-- review-pr verdict=$verdict head=$head -->"
 
 if [ "$dry_run" = 1 ]; then
