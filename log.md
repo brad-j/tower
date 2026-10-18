@@ -27,9 +27,9 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-17 | gaidin | #12 An app-wide event stream, starting with approvals | #14 | sonnet-5.5 medium | 12 | $0.17 | success | block | | |
 | 2026-10-17 | gaidin | #12 revision (auto) | #14 | sonnet-5.5 medium | 13 | $0.18 | success | pass | merged as-is | |
 | 2026-10-17 | gaidin | #13 Activity and conversation events on the app-wide stream | #15 | sonnet-5.5 medium | 34 | $0.61 | success | block | merged as-is | |
-| 2026-10-17 | silviana | #1 /api/usage: worker spend by day and repo from log.md, and tower's limits | #6 | sonnet-5.5 medium | 9 | $0.15 | success | pass | | |
-| 2026-10-17 | silviana | #2 A usage page: per-repo totals for 30 days and today, and the limits | #7 | sonnet-5.5 medium | 10 | $0.18 | success | pass | | |
+| 2026-10-17 | silviana | #1 /api/usage: worker spend by day and repo from log.md, and tower's limits | #6 | sonnet-5.5 medium | 9 | $0.15 | success | pass | merged as-is | |
+| 2026-10-17 | silviana | #2 A usage page: per-repo totals for 30 days and today, and the limits | #7 | sonnet-5.5 medium | 10 | $0.18 | success | pass | merged as-is | |
 | 2026-10-17 | silviana | #3 Usage page: a bar chart of daily spend, stacked by repo | #8 | sonnet-5.5 medium | 8 | $0.15 | success | block | | |
-| 2026-10-17 | silviana | #3 revision (auto) | #8 | sonnet-5.5 medium | 9 | $0.12 | success | pass | | |
-| 2026-10-17 | silviana | #4 Usage: reviewer and draft costs from the journal | #9 | sonnet-5.5 medium | 18 | $0.54 | success | pass | | |
-| 2026-10-17 | silviana | #5 Usage: this month's GitHub Actions minutes on private repos | #11 | sonnet-5.5 medium | 19 | $0.47 | success | pass | | |
+| 2026-10-17 | silviana | #3 revision (auto) | #8 | sonnet-5.5 medium | 9 | $0.12 | success | pass | merged as-is | |
+| 2026-10-17 | silviana | #4 Usage: reviewer and draft costs from the journal | #9 | sonnet-5.5 medium | 18 | $0.54 | success | pass | merged as-is | |
+| 2026-10-17 | silviana | #5 Usage: this month's GitHub Actions minutes on private repos | #11 | sonnet-5.5 medium | 19 | $0.47 | success | pass | merged as-is | |
