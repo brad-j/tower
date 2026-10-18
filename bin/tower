@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Sets up a repository for the agent loop from its settings in repos/NAME.sh. The judgment steps come first (the
-# settings file, AGENTS.md, CI; see PLAYBOOK.md); this checks them and does the rest.
+# settings file, AGENTS.md, CI; see PLAYBOOK.md): init drafts them, and add-repo checks them and does the rest.
 #
+#   tower init NAME [DIR]          draft repos/NAME.sh from Brad's checkout DIR (default: NAME beside tower), and its
+#                                  AGENTS.md, CLAUDE.md and CI where it has none; overwrites nothing, nothing on GitHub
 #   tower add-repo NAME            check that NAME is ready and list what setup would change; changes nothing
 #   tower add-repo NAME --apply    make those changes
 #
@@ -15,17 +17,244 @@
 set -euo pipefail
 
 . "$(dirname "$(realpath "$0")")/../lib/tower.sh"
-usage="usage: tower add-repo NAME [--apply]"
-[ "${1:-}" = add-repo ] && [ -n "${2:-}" ] || { echo "$usage" >&2; exit 1; }
+usage="usage: tower init NAME [DIR]
+       tower add-repo NAME [--apply]"
+as_brad() { env -u GH_TOKEN -u GITHUB_TOKEN gh "$@"; }
+
+# CI for a Node and pnpm repository NAME, on stdout: ci_workflow NAME E2E PLAYWRIGHT NODE [SIBLING...], with E2E and
+# PLAYWRIGHT 1 or 0, NODE the major version, and each SIBLING as OWNER/NAME.
+ci_workflow() {
+	local name=$1 e2e=$2 playwright=$3 node=$4 sibling
+	shift 4
+	cat <<- EOF
+		name: CI
+
+		on:
+		  push:
+		    branches: [main]
+		  pull_request:
+
+		permissions:
+		  contents: read
+
+		# A newer push to the same branch or pull request replaces the run in progress.
+		concurrency:
+		  group: ci-\${{ github.ref }}
+		  cancel-in-progress: true
+
+		jobs:
+		  # tower's main ruleset requires this job by its name, check.
+		  check:
+		    runs-on: ubuntu-24.04
+		    timeout-minutes: $([ "$e2e" = 1 ] && echo 20 || echo 15)
+	EOF
+	if [ $# = 0 ]; then
+		cat <<- EOF
+			    steps:
+			      - uses: actions/checkout@v7
+
+			      # The version comes from packageManager in package.json.
+			      - uses: pnpm/action-setup@v6
+			        with:
+			          cache: true
+		EOF
+	else
+		cat <<- EOF
+			    # Its siblings are checked out beside it at their main, as tower does, so a change there that breaks $name
+			    # fails here.
+			    defaults:
+			      run:
+			        working-directory: $name
+			    steps:
+			      - uses: actions/checkout@v7
+			        with:
+			          path: $name
+		EOF
+		for sibling; do
+			printf '      - uses: actions/checkout@v7\n        with:\n          repository: %s\n          path: %s\n' "$sibling" "${sibling##*/}"
+		done
+		cat <<- EOF
+
+			      # The version comes from packageManager in $name's package.json.
+			      - uses: pnpm/action-setup@v6
+			        with:
+			          package_json_file: $name/package.json
+		EOF
+	fi
+	cat <<- EOF
+
+		      # The oldest Node line the repository supports.
+		      - uses: actions/setup-node@v7
+		        with:
+		          node-version: $node
+
+	EOF
+	for sibling; do
+		printf '      - run: pnpm install --frozen-lockfile\n        working-directory: %s\n' "${sibling##*/}"
+	done
+	echo '      - run: pnpm install --frozen-lockfile'
+	echo
+	if [ "$playwright" = 1 ]; then
+		cat <<- EOF
+			      # The Playwright tests run in Chromium's headless shell.
+			      - run: pnpm exec playwright install --with-deps --only-shell chromium
+
+		EOF
+	fi
+	cat <<- EOF
+		      # Install here whatever else the tests need so none skip: system packages, services.
+
+		      - name: Check
+		        shell: bash
+		        run: pnpm check 2>&1 | tee check.log
+	EOF
+	if [ "$e2e" = 1 ]; then
+		cat <<- EOF
+
+			      - name: End-to-end tests
+			        shell: bash
+			        run: pnpm e2e 2>&1 | tee e2e.log
+
+			      # A test that skips itself when something can't start makes a broken runner look green. These match node:test's
+			      # summary and Playwright's; change them for another test runner.
+			      - name: No tests skipped
+			        run: |
+			          grep -Eqx '(# |ℹ )skipped 0' check.log
+			          ! grep -Eq '^ +[0-9]+ skipped' e2e.log
+		EOF
+	else
+		cat <<- EOF
+
+			      # A test that skips itself when something can't start makes a broken runner look green. This matches node:test's
+			      # summary; change it for another test runner.
+			      - name: No tests skipped
+			        run: grep -Eqx '(# |ℹ )skipped 0' check.log
+		EOF
+	fi
+}
+
+# tower init NAME [DIR]: what can be read from the checkout goes into the drafts, and what needs judgment is left as a
+# TODO line, which tower add-repo reports until it's gone.
+init_repo() {
+	local name=${1:-} dir=${2:-} file pkg tracked remote repo owner_of sibling siblings=() check e2e=0 playwright=0 node
+	local extra=() generated=() path parts unprovable_here visibility notes=() wrote=() text
+	settings_defaults
+	[[ $name =~ ^[a-z0-9-]+$ ]] && [ $# -le 2 ] || { echo "$usage" >&2; exit 1; }
+	file=$tower/repos/$name.sh
+	[ ! -e "$file" ] || { echo "repos/$name.sh exists: edit it, then run tower add-repo $name" >&2; exit 1; }
+	dir=${dir:-$(dirname "$tower")/$name}
+	[ -d "$dir" ] || { echo "no checkout of $name at $dir; give its directory: tower init $name DIR" >&2; exit 1; }
+	dir=$(realpath "$dir")
+	pkg=$dir/package.json
+	if [ ! -f "$pkg" ] || [ ! -f "$dir/pnpm-lock.yaml" ] || ! tracked=$(git -C "$dir" ls-files); then
+		echo "$dir isn't a Git checkout with package.json and pnpm-lock.yaml; tower takes Node with pnpm (PLAYBOOK.md, step 1)" >&2
+		exit 1
+	fi
+
+	remote=$(git -C "$dir" remote get-url origin 2> /dev/null || true)
+	if [[ $remote =~ github\.com[:/]([^/]+/[^/]+)$ ]]; then repo=${BASH_REMATCH[1]%.git}
+	else repo=$owner/$name; notes+=("$dir has no GitHub origin, so repo=$repo is a guess"); fi
+	owner_of=${repo%%/*}
+	for sibling in $(jq -r '[.dependencies, .devDependencies] | map(. // {} | to_entries[]) | .[].value
+		| select(startswith("link:../")) | ltrimstr("link:../") | select(test("^[A-Za-z0-9._-]+$"))' "$pkg" | sort -u); do
+		siblings+=("$owner_of/$sibling")
+	done
+
+	check="pnpm check"
+	jq -e '.scripts.check' "$pkg" > /dev/null ||
+		notes+=("package.json has no check script: add one that runs the type check, lint and tests, or change check in repos/$name.sh and CI")
+	if jq -e '.scripts.e2e and (.scripts.check // "" | test("pnpm e2e") | not)' "$pkg" > /dev/null; then
+		check+=" && pnpm e2e" e2e=1
+	fi
+	jq -e '[.dependencies, .devDependencies] | map(. // {}) | add | has("@playwright/test")' "$pkg" > /dev/null && playwright=1
+	node=$(jq -r '[.engines.node // "" | capture("(?<v>[0-9]+)").v][0] // "22"' "$pkg")
+
+	# Config that steers the checks, beyond the default flagged_paths.
+	for path in vite.config.ts vite.config.js vitest.config.ts playwright.config.ts tsconfig.json .oxlintrc.json \
+		eslint.config.js eslint.config.mjs biome.json .npmrc; do
+		grep -qxF "$path" <<< "$tracked" && extra+=("$path")
+	done
+	parts='\.md$'
+	grep -q '\.css$' <<< "$tracked" && parts+='|\.css$'
+	grep -q '^docs/' <<< "$tracked" && parts+='|^docs/'
+	unprovable_here="($parts)"
+	mapfile -t generated < <(grep -E '\.gen\.[a-z]+$' <<< "$tracked" || true)
+	visibility=$(as_brad api "repos/$repo" -q .visibility 2> /dev/null || true)
+	[ -n "$visibility" ] || notes+=("couldn't read $repo on GitHub as $owner, so public=1 is assumed; tower add-repo checks it")
+
+	{
+		echo "# $name: Node and pnpm$([ "$playwright" = 0 ] || echo ", Playwright with Chromium")$([ "${#siblings[@]}" = 0 ] || echo ", with ${siblings[*]##*/} beside it"). Sourced by"
+		echo "# lib/tower.sh, which says what each setting means and what the ones not set here default to."
+		echo
+		echo "repo=$repo"
+		if [ "${#siblings[@]}" = 0 ]; then echo "clone=\$HOME/novices/$name"; else echo "clone=\$HOME/novices/$name/$name"; fi
+		echo "state=\$HOME/novices/state/$name"
+		[ "${#siblings[@]}" = 0 ] || echo "siblings=(${siblings[*]})"
+		echo "check=\"$check\""
+		echo
+		echo "# TODO: list the safety code as paths or path prefixes (PLAYBOOK.md, step 2), then delete this line."
+		echo "safety_paths=()"
+		echo
+		[ "${#extra[@]}" = 0 ] || echo "flagged_paths+=(${extra[*]})"
+		[ "$unprovable_here" = "$unprovable" ] || echo "unprovable='$unprovable_here'"
+		[ "${#generated[@]}" = 0 ] || echo "uncounted+=(${generated[*]})"
+		if [ -n "$visibility" ] && [ "$visibility" != public ]; then
+			echo
+			echo "# Private: rulesets on it need GitHub Pro."
+			echo "public=0"
+		fi
+		echo
+		echo "vouched=0"
+		echo "automerge=0"
+	} > "$file"
+	wrote+=("$file")
+
+	if [ -e "$dir/AGENTS.md" ]; then
+		notes+=("AGENTS.md exists, so it's left as it is: check it against templates/AGENTS.md (PLAYBOOK.md, step 3)")
+	else
+		text=$(< "$tower/templates/AGENTS.md")
+		text=${text/#"# NAME"/"# $name"}
+		text=${text/"\`pnpm check\` before every commit"/"\`$check\` before every commit"}
+		if [ -n "$visibility" ] && [ "$visibility" != public ]; then text=$(grep -v '^- For a public repository' <<< "$text"); fi
+		printf '%s\n' "$text" > "$dir/AGENTS.md"
+		wrote+=("$dir/AGENTS.md")
+	fi
+	if [ ! -e "$dir/CLAUDE.md" ]; then
+		echo @AGENTS.md > "$dir/CLAUDE.md"
+		wrote+=("$dir/CLAUDE.md")
+	elif [ "$(tr -d '[:space:]' < "$dir/CLAUDE.md")" != @AGENTS.md ]; then
+		notes+=("move CLAUDE.md's rules into AGENTS.md, then make CLAUDE.md the single line @AGENTS.md (PLAYBOOK.md, step 3)")
+	fi
+	if [ -e "$dir/.github/workflows/ci.yml" ]; then
+		notes+=(".github/workflows/ci.yml exists, so it's left as it is: it needs a job named $ci_job that fails on a skipped test (PLAYBOOK.md, step 4)")
+	else
+		mkdir -p "$dir/.github/workflows"
+		ci_workflow "$name" "$e2e" "$playwright" "$node" "${siblings[@]}" > "$dir/.github/workflows/ci.yml"
+		wrote+=("$dir/.github/workflows/ci.yml")
+	fi
+
+	printf 'wrote %s\n' "${wrote[@]}"
+	echo "Next (PLAYBOOK.md, steps 2 to 5):"
+	echo "  - list the safety code in repos/$name.sh, and the same in AGENTS.md's Rules"
+	[ "${#notes[@]}" = 0 ] || printf '  - %s\n' "${notes[@]}"
+	echo "  - fill in AGENTS.md's placeholders, and add to CI what the tests need"
+	echo "  - read the diff in $dir, push it to main, and wait for CI's $ci_job to pass there"
+	echo "  - tower add-repo $name"
+}
+
+case ${1:-} in
+	init) shift; init_repo "$@"; exit ;;
+	add-repo) [ -n "${2:-}" ] && [ $# -le 3 ] || { echo "$usage" >&2; exit 1; } ;;
+	*) echo "$usage" >&2; exit 1 ;;
+esac
 if [ ! -f "$tower/repos/$2.sh" ]; then
-	echo "no repos/$2.sh yet: copy repos/gaidin.sh and fill it in for $2 (PLAYBOOK.md, step 2)" >&2
+	echo "no repos/$2.sh yet: tower init $2 drafts it (PLAYBOOK.md, step 2)" >&2
 	exit 1
 fi
 load_settings "$2"
 apply=0
 case ${3:-} in --apply) apply=1 ;; "") ;; *) echo "$usage" >&2; exit 1 ;; esac
 
-as_brad() { env -u GH_TOKEN -u GITHUB_TOKEN gh "$@"; }
 as_agent() { GH_TOKEN=$(cat "$agent_token") gh "$@"; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -65,6 +294,8 @@ else
 	else todo "$visibility, and GitHub won't give it rulesets: that needs GitHub Pro on $owner"; fi
 	[ "$public" = 0 ] || todo "the repository isn't public: set public=0 in repos/$repo_name.sh"
 fi
+if grep -q '^# TODO' "$tower/repos/$repo_name.sh"; then todo "repos/$repo_name.sh has TODO lines: $(grep '^# TODO' "$tower/repos/$repo_name.sh" | sed 's/^# TODO: *//' | paste -sd' ')"
+else ok "repos/$repo_name.sh has no TODO lines"; fi
 if [ "$(jq -r .default_branch "$work/repo.json")" = main ]; then ok "default branch main"; else todo "the default branch isn't main"; fi
 
 raw() { as_brad api -H "Accept: application/vnd.github.raw+json" "repos/$repo/contents/$1" 2> /dev/null; }
@@ -83,7 +314,7 @@ read -r ci_conclusion integration < <(as_brad api "repos/$repo/commits/main/chec
 integration=${integration:-15368}
 case ${ci_conclusion:-none} in
 	success) ok "CI's $ci_job job passed on main" ;;
-	none) todo "no CI job named $ci_job has run on main (templates/ci-node-pnpm.yml)" ;;
+	none) todo "no CI job named $ci_job has run on main (tower init writes one)" ;;
 	*) todo "CI's $ci_job job on main: $ci_conclusion" ;;
 esac
 if [ "$(as_agent api user -q .login 2> /dev/null)" = "$agent" ]; then ok "the agent's token works as $agent"

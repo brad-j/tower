@@ -64,6 +64,57 @@ size_label() {
 	else echo size:XL; fi
 }
 
+# A repo's settings, repos/NAME.sh, set these, which every repo needs. silviana reads repo and state from the file as
+# plain NAME=VALUE lines, so they're written out rather than derived.
+#
+#   repo           the GitHub repository, OWNER/NAME
+#   clone          the agents' clone: $HOME/novices/NAME, or $HOME/novices/NAME/NAME with siblings beside it. Set up by
+#                  tower add-repo: HTTPS remote, a credential helper that reads only the agent's token, user
+#                  brads-agents, a pre-push hook refusing main
+#   state          the loop's state, $HOME/novices/state/NAME
+#   check          what the worker is told must pass before it commits. CI runs the same
+#   safety_paths   safety code, as paths or path prefixes: code where a mistake leaks data or lets through something
+#                  that should be stopped. The reviewer blocks a change here that lets more through unless the issue
+#                  asked for it, and agents aren't given issues here until the log earns it
+required_settings=(repo clone state check safety_paths)
+
+# The rest have defaults for a Node and pnpm repository, set here before the file is read. A file replaces one, or
+# adds to an array with +=, as in allowed+=("Bash(taskset *)").
+settings_defaults() {
+	# Repositories (OWNER/NAME) checked out beside the clone at their main, refreshed before each run, read-only to the
+	# worker.
+	siblings=()
+	# Run inside the sandbox before each worker run, since package.json may be the agent's. Also installs the siblings.
+	setup=(pnpm install --frozen-lockfile)
+	# Worker tools. bin/novice adds its own deny list (push, gh, remote, config, curl) on top.
+	allowed=(Read Edit Write Glob Grep "Bash(pnpm *)" "Bash(node *)" "Bash(git status*)" "Bash(git diff*)" "Bash(git add *)"
+		"Bash(git commit *)" "Bash(git log*)" "Bash(git show*)" "Bash(ls *)" "Bash(cat *)" "Bash(grep *)" "Bash(mktemp *)" "Bash(rm -rf /tmp/*)")
+	# Mounted read-only in the sandbox, besides Node, the clone and the siblings: pnpm's store and Playwright's browsers.
+	sandbox_ro=("$HOME/.local/share/pnpm/store" "$HOME/.cache/ms-playwright")
+	# Files that steer CI, agents, dependencies or the checks, as paths or path prefixes. A PR touching them, or the safety
+	# code, gets a warning at the top and the needs-brad label. They make up flagged, an extended regex over the diff's
+	# file names, unless the file sets flagged itself.
+	flagged_paths=(.github/ AGENTS.md CLAUDE.md package.json pnpm-lock.yaml pnpm-workspace.yaml)
+	unset flagged
+	# Files whose claims or look a test can't prove (an extended regex), usually docs and styles. A PR touching them gets
+	# the needs-brad label.
+	unprovable='(\.md$|^docs/)'
+	# Left out of the line count for the size limit: lockfiles and generated files.
+	uncounted=(pnpm-lock.yaml)
+	# 1 for a public repository, which adds the reviewer's check for host names, addresses, people, home paths and
+	# secrets. tower add-repo says if it doesn't match GitHub.
+	public=1
+	# Brad sets vouched=1 once log.md shows about 10 merged PRs with nothing found after merge. It only changes the
+	# agent's PRs from vouch:unvouched to vouch:trusted; every check and label still applies.
+	vouched=0
+	# Brad sets automerge=1, with vouched=1, to let novice merge small PRs that pass everything after a waiting time he
+	# can stop by removing the automerge label. tower add-repo then drops the ruleset's required approval on the repo.
+	automerge=0
+}
+
+# The extended regex matching file names under any of the paths given.
+paths_regex() { printf '%s\n' "$@" | sed 's/[].*^$()+?{}|[\\]/\\&/g' | paste -sd'|' | sed 's/.*/^(&)/'; }
+
 load_settings() {
 	repo_name=${1:-}
 	local file=$tower/repos/$repo_name.sh var
@@ -71,11 +122,13 @@ load_settings() {
 		echo "no settings for '$repo_name'; repos: $(cd "$tower/repos" && ls -- *.sh | sed 's/\.sh$//' | tr '\n' ' ')" >&2
 		exit 1
 	fi
+	settings_defaults
 	# shellcheck source=/dev/null
 	. "$file"
-	for var in repo clone siblings state setup check allowed sandbox_ro flagged safety_paths unprovable uncounted public vouched automerge; do
+	for var in "${required_settings[@]}"; do
 		declare -p "$var" > /dev/null 2>&1 || { echo "$file doesn't set $var" >&2; exit 1; }
 	done
+	[ -n "${flagged:-}" ] || flagged=$(paths_regex "${flagged_paths[@]}")
 	# bwrap options for the sandbox: the repo's caches read-only, and separately its siblings read-only.
 	sandbox_args=() sibling_args=()
 	local path sibling

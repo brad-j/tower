@@ -14,24 +14,18 @@ How to add a repository to tower and run the loop on it. Steps marked "session" 
 
 ### 2. Settings (session)
 
-Copy `repos/gaidin.sh` to `repos/NAME.sh` and fill in each field:
+`tower init NAME` drafts `repos/NAME.sh` from Brad's checkout of NAME beside tower (or `tower init NAME DIR`), along with steps 3 and 4. It reads the repo from the checkout's origin, `siblings` from `link:../NAME` dependencies, `check` from package.json's `check` and `e2e` scripts, config files to flag, generated files to leave out of the size count, and whether GitHub has it private. It never overwrites a file. Settings a file leaves out take the defaults in `lib/tower.sh`, which also says what each one means. Then, with the session:
 
-- `repo`, `clone` (`$HOME/novices/NAME`, or `$HOME/novices/NAME/NAME` with siblings beside it), `state` (`$HOME/novices/state/NAME`), `siblings`.
-- `setup`: the install command, from the lockfile. `check`: the command CI runs.
-- `allowed`: the worker's tools. Start from gaidin's.
-- `sandbox_ro`: caches the check needs, such as pnpm's store and `~/.cache/ms-playwright`. `tower add-repo NAME --apply` runs the check in the sandbox and shows what fails without them.
-- `flagged`: files that steer CI, agents or dependencies: `.github/`, `AGENTS.md`, `CLAUDE.md`, the manifest and lockfiles.
-- `safety_paths`: code where a mistake leaks data or lets through something that should be stopped (authentication, sandboxing, approvals, redaction). Agents get no issues there until the repository is vouched for.
-- `unprovable`: files whose claims no test checks, usually docs. `uncounted`: lockfiles, left out of the size count.
-- `public`: 1 for a public repository, which adds the reviewer's check for personal details. `vouched=0`.
+- `safety_paths`: code where a mistake leaks data or lets through something that should be stopped (authentication, sandboxing, approvals, redaction). init leaves it empty under a TODO line, and `tower add-repo` reports the TODO until the line is deleted. Agents get no issues there until the repository is vouched for.
+- Read the rest. `check` is what CI runs. `flagged_paths+=`, `uncounted+=` and `allowed+=` add to the defaults; setting the name without `+` replaces them. `sandbox_ro` covers pnpm's store and Playwright's browsers; `tower add-repo NAME --apply` runs the check in the sandbox and shows what fails without anything else it needs.
 
 ### 3. AGENTS.md (session)
 
-Start from `templates/AGENTS.md`. Carry over every rule from the repository's CLAUDE.md, then make CLAUDE.md the single line `@AGENTS.md`. It needs the exact check command, the safety code (matching `safety_paths`), the rule against adding dependencies in a task, and an empty "Mistakes agents have made" section.
+Where the checkout has none, init writes AGENTS.md from `templates/AGENTS.md` with the name and check command filled in, and CLAUDE.md as the single line `@AGENTS.md`. Fill in the placeholders. Carry over every rule from an existing CLAUDE.md, then make it the single line `@AGENTS.md`. It needs the exact check command, the safety code (matching `safety_paths`), the rule against adding dependencies in a task, and an empty "Mistakes agents have made" section.
 
 ### 4. CI (session)
 
-Copy `templates/ci-node-pnpm.yml` to `.github/workflows/ci.yml`. Keep the job name `check`, which the ruleset requires. Install whatever the tests need so none skip, and keep the step that fails on a skipped test. A repository with a sibling dependency checks the sibling out beside it.
+Where the checkout has none, init writes `.github/workflows/ci.yml`: its siblings checked out beside it, Playwright's Chromium when it uses Playwright, `pnpm check` and `pnpm e2e` as steps, and a step that fails on a skipped test. Keep the job name `check`, which the ruleset requires. Install whatever else the tests need so none skip (moiraine's install bubblewrap for gaidin's e2e server). A private sibling needs a token to check out, which init doesn't add.
 
 ### 5. Land them on main (session)
 

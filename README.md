@@ -6,6 +6,7 @@ To set tower up on a machine, follow `SETUP.md`. To add a repository, follow `PL
 
 ## Commands
 
+- `bin/tower init NAME [DIR]`: drafts `repos/NAME.sh` from Brad's checkout, and its AGENTS.md, CLAUDE.md and CI where it has none. Overwrites nothing and changes nothing on GitHub.
 - `bin/tower add-repo NAME [--apply]`: checks that a repository is ready and sets up its GitHub settings, labels, ruleset, the agents' clone and the check in the sandbox. Without `--apply` it changes nothing.
 - `bin/novice REPO [--dry-run]`: the loop. Starts the oldest untried `agent` issue or revises the open agent PR, and stops when it's Brad's turn.
 - `bin/review-pr REPO PR [--dry-run]` or `bin/review-pr REPO --head REF --issue N`: the reviewer. Sees only the issue, the PR description and the diff.
@@ -29,9 +30,9 @@ What they leave on a PR:
 
 ## Layout
 
-- `repos/NAME.sh`: per-repo settings (GitHub repo, clone, state dir, setup and check commands, worker tools, sandbox paths, flagged files, safety code, docs, uncounted files, public or not). `lib/tower.sh` loads them, says which ones are missing, and holds the checks both scripts share.
+- `repos/NAME.sh`: per-repo settings (GitHub repo, clone, state dir, setup and check commands, worker tools, sandbox paths, flagged files, safety code, docs, uncounted files, public or not). `lib/tower.sh` loads them over its defaults, says what each one means and which required ones are missing, and holds the checks both scripts share.
 - `lib/tower.sh`: the accounts, labels, size limit and ruleset shared by the scripts. `lib/pre-push`: the hook installed in each clone.
-- `templates/`: AGENTS.md and CI to start a new repository from.
+- `templates/`: AGENTS.md to start a new repository from. `tower init` fills it in and writes CI.
 - `log.md`: one line per worker run, with what Brad did and any problem found after merge. novice commits each line it adds ("Log REPO: ...") but never pushes tower; Brad's pushes take them up.
 - `~/novices/`, outside this repo: the agents' clones (`~/novices/gaidin`), loop state (`~/novices/state/NAME/`) and issue drafts.
 
