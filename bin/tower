@@ -6,8 +6,8 @@
 #   tower add-repo NAME --apply    make those changes
 #
 # Setup: brads-agents as a collaborator with write, its invitation accepted; merged branches deleted; tower's labels;
-# the main ruleset (a PR with one approval, CI's check and review required, no force push or deletion, admins can
-# bypass); the agents' clone with its remote, identity, credential helper and pre-push hook; and the check passing in
+# the main ruleset (a PR with one approval, or none where vouched=1 and automerge=1 let novice merge, CI's check and
+# review required, no force push or deletion, admins can bypass); the agents' clone with its remote, identity, credential helper and pre-push hook; and the check passing in
 # the sandbox. Running it again changes only what has drifted.
 #
 # Repository settings need an admin, so this uses Brad's own gh login, except to accept the invitation as brads-agents.
@@ -123,7 +123,11 @@ for label in "${missing[@]}"; do
 	change "label $name" as_brad label create "$name" -R "$repo" --color "$color" --description "$description" --force
 done
 
-ruleset_spec "$integration" > "$work/ruleset.json"
+approvals=1
+if [ "$automerge" = 1 ]; then
+	if [ "$vouched" = 1 ]; then approvals=0; else todo "automerge=1 needs vouched=1 too in repos/$repo_name.sh"; fi
+fi
+ruleset_spec "$integration" "$approvals" > "$work/ruleset.json"
 normal() { jq -S '{name, target, enforcement, conditions, bypass_actors, rules: (.rules | sort_by(.type))}' "$@"; }
 id=$(as_brad api "repos/$repo/rulesets" -q '.[] | select(.name == "main") | .id')
 if [ -z "$id" ]; then
@@ -131,7 +135,7 @@ if [ -z "$id" ]; then
 else
 	as_brad api "repos/$repo/rulesets/$id" | normal > "$work/ruleset.now"
 	if normal "$work/ruleset.json" | cmp -s - "$work/ruleset.now"; then
-		ok "the main ruleset (id $id) requires a PR, $ci_job and review"
+		ok "the main ruleset (id $id) requires a PR with $approvals approval$([ "$approvals" = 1 ] || echo s), $ci_job and review"
 	else
 		normal "$work/ruleset.json" | diff "$work/ruleset.now" - | sed 's/^/         /' || true
 		change "update the main ruleset (id $id): < now, > tower's" as_brad api -X PUT "repos/$repo/rulesets/$id" --input "$work/ruleset.json" --silent

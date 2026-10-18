@@ -1,11 +1,12 @@
 [Unit]
-Description=tower: run the agent loop on %i every 15 minutes
+Description=tower: run the agent loop on %i every 2 minutes
 
 [Timer]
-# A run that's still going (waiting on CI, or a worker) isn't started again; one Brad starts by hand takes the lock and
-# this one exits.
-OnCalendar=*:0/15
-RandomizedDelaySec=1m
+# novice exits after a few GitHub calls when nothing changed since its last full run, so it can run this often and pick
+# up a merge or a review within about 2 minutes. A run that's still going (waiting on CI, or a worker) isn't started
+# again; one Brad starts by hand takes the lock and this one exits.
+OnCalendar=*:0/2
+RandomizedDelaySec=20s
 Unit=tower@%i.service
 
 [Install]

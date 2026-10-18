@@ -105,7 +105,7 @@ bin/novice gaidin --dry-run          # says what the loop would do next
 
 ## 9. The timer
 
-A systemd user timer runs `bin/novice NAME` for each repository every 15 minutes, so the loop picks up after Brad approves, merges or requests changes. The units are in `systemd/`; `tower@.service` names tower's path, so update it if tower moves.
+A systemd user timer runs `bin/novice NAME` for each repository every 2 minutes, so the loop picks up soon after Brad approves, merges or requests changes. A run where nothing changed on GitHub exits after a few calls. The units are in `systemd/`; `tower@.service` names tower's path, so update it if tower moves.
 
 ```fish
 systemctl --user link ~/westwood/Projects/Software/tower/systemd/tower@.service ~/westwood/Projects/Software/tower/systemd/tower@.timer
@@ -115,10 +115,11 @@ loginctl enable-linger $USER    # keeps them running while logged out; already o
 
 ## Running
 
-- The timers start `bin/novice NAME` every 15 minutes. Running it by hand still works: while one run is going, another on the same repository exits at once (the lock is `~/novices/state/NAME/lock`), and a run that's still going isn't started again.
+- The timers start `bin/novice NAME` every 2 minutes. It does a full run only when something changed on the repository's or its siblings' issues and PRs (`~/novices/state/NAME/stamp` holds what it saw last), on a new day, or when an auto-merge is due; after a run that stops on an error it waits 15 minutes. A run by hand skips the same way; remove the stamp file to force a full one. Running it by hand still works: while one run is going, another on the same repository exits at once (the lock is `~/novices/state/NAME/lock`), and a run that's still going isn't started again.
 - What it did: `journalctl --user -u tower@NAME -e`. When it's next due: `systemctl --user list-timers 'tower@*'`.
 - Pause a repository: `systemctl --user stop tower@NAME.timer` (until the next login or reboot) or `disable --now` (until it's enabled again).
 - A new repository's timer: `systemctl --user enable --now tower@NAME.timer`, after its first run by hand.
+- After changing `systemd/tower@.timer`: `systemctl --user daemon-reload`, then `systemctl --user restart tower@NAME.timer` for each enabled timer.
 - Limits, in `bin/novice` and `bin/review-pr`: 25 worker runs a day per repository, Sonnet 5.5 at medium effort for the worker and Opus 5.5 at high effort for the reviewer, $3 and 30 minutes per worker run, $0.75 and 10 minutes per review, one agent PR open at a time, diffs up to 300 lines.
 
 ## Where things are kept

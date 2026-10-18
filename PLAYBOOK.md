@@ -59,13 +59,13 @@ Run it without `--apply` and read the plan with Brad. It changes a repository's 
 
 ## Running the loop
 
-- `bin/novice NAME` steps until it's Brad's turn. Its timer runs it every 15 minutes; `journalctl --user -u tower@NAME` shows what it did.
-- An issue the agent didn't finish, or one that came out over 300 lines, is marked tried. Fix or split the issue, then remove `~/novices/state/NAME/issue-N` to let it run again.
+- `bin/novice NAME` steps until it's Brad's turn. Its timer runs it every 2 minutes, and it exits at once unless something changed on GitHub; `journalctl --user -u tower@NAME` shows what it did.
+- An issue the agent didn't finish, or one that came out over 300 lines, is marked tried. Edit it (fix it, or split it and narrow this one) and it runs again; so does one whose "Blocked by" issue is closed as completed. Removing `~/novices/state/NAME/issue-N` still works too.
 - A failed CI run is rerun once before the agent revises. A test that passes on the rerun is named as flaky in the summary comment and log.md's CI column; a flaky test is a bug to fix with its own issue, not something to rerun forever.
 - A PR merged or closed before the loop came back to it still gets its log line on the next run.
 - novice commits each log line in tower itself and never pushes, since pushing tower uses Brad's SSH key.
-- A problem found after merge goes in log.md's After merge column, with a link. If a line in AGENTS.md would have prevented it, add one under "Mistakes agents have made" in a PR.
-- Vouching: once log.md shows about 10 merged PRs on a repository with nothing found after merge, Brad can set `vouched=1` in its settings. It changes only the label. Opening safety code to agents is a separate decision.
+- novice fills in log.md's "Brad stepped in" and, for reverts and "Broken by #N" issues, "After merge". Brad writes any other problem found after merge there himself, with a link. If a line in AGENTS.md would have prevented it, add one under "Mistakes agents have made" in a PR.
+- Vouching: once log.md shows about 10 merged PRs on a repository with nothing found after merge, Brad can set `vouched=1` in its settings. It changes only the label. Opening safety code to agents is a separate decision. Auto-merge (`automerge=1`, then `tower add-repo NAME --apply`) is another, made per repository.
 
 ## Lessons
 

@@ -44,3 +44,7 @@ public=1
 # Brad sets this to 1 to vouch for the agent here, once log.md shows about 10 merged PRs with nothing found after merge.
 # It only changes the agent's PRs from vouch:unvouched to vouch:trusted; every check and label still applies.
 vouched=0
+
+# Brad sets this to 1, with vouched=1, to let novice merge small PRs that pass everything after a waiting time he can
+# stop by removing the automerge label. tower add-repo then drops the ruleset's required approval on this repo.
+automerge=0

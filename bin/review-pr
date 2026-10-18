@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Adversarial review of an agent's pull request, by a model that sees only the issue, the diff and the PR's description:
-# no tools, no repository, no AGENTS.md, no earlier session. It posts its review as a comment from brads-agents and sets
-# the PR head's review status, which the main ruleset requires: pending while it runs, success, failure on blocking
-# findings or a diff over the size limit, error if the review didn't run. A crash leaves it pending, which still blocks.
+# Adversarial review of an agent's pull request, by a model that sees only the issue, the diff, the PR's description and
+# CI's result on its head: no tools, no repository, no AGENTS.md, no earlier session. It posts its review as a comment
+# from brads-agents and sets the PR head's review status, which the main ruleset requires: pending while it runs,
+# success, failure on blocking findings or a diff over the size limit, error if the review didn't run. A crash leaves it pending, which still blocks.
 #
 #   review-pr REPO PR [--dry-run]           review a PR; --dry-run prints the review instead of posting it
 #   review-pr REPO --head REF --issue N     review a local commit against origin/main (always a dry run)
@@ -73,10 +73,27 @@ lines=$(diff_lines "$head")
 [ "$size" -le "$max_diff_bytes" ] || stop failure "the diff is $size bytes, over $max_diff_bytes: split it"
 gh issue view -R "$repo" "$issue" --json title,body -q '"# Issue #'"$issue"': " + .title + "\n\n" + .body' > "$work/issue.md"
 
+# CI's conclusion on exactly this head, with the test counts from its log, so the reviewer doesn't list the check
+# passing as something it can't verify.
+ci_summary() {
+	local run status conclusion counts
+	read -r run status conclusion < <(gh run list -R "$repo" --commit "$1" --workflow ci.yml --limit 1 \
+		--json databaseId,status,conclusion -q '.[0] // {} | "\(.databaseId // "") \(.status // "") \(.conclusion // "")"') || true
+	if [ -z "$run" ]; then echo "No CI run on this commit yet, so the check passing is unverified."; return; fi
+	if [ "$status" != completed ]; then echo "CI hasn't finished on this commit, so the check passing is unverified."; return; fi
+	counts=$(gh run view -R "$repo" "$run" --log 2> /dev/null | cut -f3- | sed -E 's/^[0-9TZ:.-]+ //' |
+		grep -E '^(# |ℹ )(tests|pass|fail|skipped) [0-9]+$|^ +[0-9]+ (passed|failed|skipped|flaky)( |$)' |
+		sed -E 's/^(# |ℹ | +)//; s/ \([0-9.]+[a-z]*\)$//' | paste -sd, | sed 's/,/, /g' || true)
+	echo "CI ran \`$check\` on exactly this commit: $conclusion.${counts:+ Its test counts: $counts.}"
+}
+if [ -n "$pr" ]; then ci=$(ci_summary "$head"); else ci="None: a local commit, not pushed, so the check passing is unverified."; fi
+
 system='You review pull requests adversarially. An agent wrote this one to resolve the issue you are given. Your job is to find the reasons it should not be merged, before a human spends time on it. Assume it is wrong until the diff shows otherwise. You are not here to encourage anyone.
 
 Check:
-1. Each "Done when" condition in the issue. Met, not met, or not something a diff can show (a command run, an output): say which.
+1. Each "Done when" condition in the issue. Met, not met, or not something the diff and CI can show: say which. When CI
+   passed on this commit, the check passing is shown, and so is anything a test in the diff asserts, once you have
+   confirmed the test asserts it.
 2. Correctness. Inputs or paths that now break, errors swallowed or turned into the wrong message, behavior that changed beyond what the issue asks.
 3. Tests. Would the new tests fail without the change? Is any existing assertion weakened, removed or skipped?
 4. Scope. Changes the issue did not ask for.
@@ -113,11 +130,12 @@ Numbered findings, or "None."
 At most three that should not block, or "None."
 
 ## Unverified
-Done conditions the diff cannot show, or "None."'
+Done conditions neither the diff nor a passing CI run shows, such as wording or layout a person has to look at, or
+"None."'
 
 {
 	cat "$work/issue.md"
-	printf '\n\n# Pull request description (the author'"'"'s claims, to check against the diff)\n\n%s\n\n# Diff against main\n\n~~~diff\n' "$description"
+	printf '\n\n# Pull request description (the author'"'"'s claims, to check against the diff)\n\n%s\n\n# CI on this commit\n\n%s\n\n# Diff against main\n\n~~~diff\n' "$description" "$ci"
 	cat "$work/diff"
 	printf '~~~\n'
 } > "$work/prompt.md"
@@ -141,7 +159,7 @@ esac
 comment="$review
 
 ---
-<sub>Adversarial review by a model with no tools that saw only issue #$issue, this PR's description and its diff (Opus 5.5, est. \$$cost). A human decides.</sub>
+<sub>Adversarial review by a model with no tools that saw only issue #$issue, this PR's description, its diff and CI's result (Opus 5.5, est. \$$cost). A human decides.</sub>
 <!-- review-pr verdict=$verdict head=$head -->"
 
 if [ "$dry_run" = 1 ]; then

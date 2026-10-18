@@ -10,6 +10,8 @@ agent_email=344078136+brads-agents@users.noreply.github.com
 agent_token=$HOME/.config/gh-agents/token
 # Bigger diffs aren't opened, pushed or reviewed; the issue gets split instead.
 max_lines=300
+# A merged PR with no problem found after this many days gets "none" in log.md's After merge column.
+quiet_days=7
 
 # Labels tower uses on each repository, as NAME|COLOR|DESCRIPTION.
 labels=(
@@ -23,6 +25,7 @@ labels=(
 	"size:XL|B60205|Over 300 changed lines: over the limit, split it"
 	"vouch:trusted|0E8A16|Written by Brad, or by the agent on a repo where Brad has vouched for it"
 	"vouch:unvouched|FBCA04|Written by the agent before it has earned trust on this repo: read with more care"
+	"automerge|0E8A16|novice merges this when its waiting time is up; Brad removes the label to stop it"
 )
 
 # The names in labels, space-separated.
@@ -31,10 +34,11 @@ join_names() { printf '%s\n' "$@" | cut -d'|' -f1 | paste -sd' '; }
 # CI's job name, which the main ruleset requires; every repo's CI workflow has a job by this name.
 ci_job=check
 
-# The main ruleset for a repo whose CI runs on the app INTEGRATION (GitHub Actions is 15368): a PR with one approval,
-# CI's job and the reviewer's review status required, no force push or deletion, and admins (Brad) can bypass.
+# The main ruleset for a repo whose CI runs on the app INTEGRATION (GitHub Actions is 15368): a PR with APPROVALS
+# approvals (1, or 0 where novice auto-merges), CI's job and the reviewer's review status required, no force push or
+# deletion, and admins (Brad) can bypass.
 ruleset_spec() {
-	jq -n --arg job "$ci_job" --argjson app "$1" '{
+	jq -n --arg job "$ci_job" --argjson app "$1" --argjson approvals "$2" '{
 		name: "main", target: "branch", enforcement: "active",
 		conditions: {ref_name: {exclude: [], include: ["~DEFAULT_BRANCH"]}},
 		bypass_actors: [{actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always"}],
@@ -42,7 +46,7 @@ ruleset_spec() {
 			{type: "deletion"},
 			{type: "non_fast_forward"},
 			{type: "pull_request", parameters: {
-				required_approving_review_count: 1, dismiss_stale_reviews_on_push: true, required_reviewers: [],
+				required_approving_review_count: $approvals, dismiss_stale_reviews_on_push: true, required_reviewers: [],
 				require_code_owner_review: false, require_last_push_approval: false,
 				required_review_thread_resolution: false, require_extra_approval_for_unattributed_changes: true,
 				allowed_merge_methods: ["merge", "squash", "rebase"]}},
@@ -69,7 +73,7 @@ load_settings() {
 	fi
 	# shellcheck source=/dev/null
 	. "$file"
-	for var in repo clone siblings state setup check allowed sandbox_ro flagged safety_paths unprovable uncounted public vouched; do
+	for var in repo clone siblings state setup check allowed sandbox_ro flagged safety_paths unprovable uncounted public vouched automerge; do
 		declare -p "$var" > /dev/null 2>&1 || { echo "$file doesn't set $var" >&2; exit 1; }
 	done
 	# bwrap options for the sandbox: the repo's caches read-only, and separately its siblings read-only.
@@ -134,6 +138,24 @@ safety_named() {
 		if grep -qF -e "$path" -e "$name" <<< "$text"; then found+=("$path"); fi
 	done
 	[ "${#found[@]}" = 0 ] || printf '%s\n' "${found[@]}" | paste -sd, | sed 's/,/, /g'
+}
+
+# What bin/novice compares to see whether anything happened on GitHub since its last full run: when the repo's and its
+# siblings' issues and PRs last changed (a comment, label, review, merge or close), and the open PRs' heads (a push).
+github_stamp() {
+	local name
+	for name in "$repo" "${siblings[@]}"; do
+		gh api "repos/$name/issues?state=all&sort=updated&direction=desc&per_page=1" -q '"'"$name"' \(.[0].updated_at // "")"'
+	done
+	gh pr list -R "$repo" --state open --json number,headRefOid -q '.[] | "#\(.number) \(.headRefOid)"'
+}
+
+# log.md's rows for the repo NAME, oldest first, as tab-separated cells: PR, Brad stepped in, After merge. Cells are
+# counted from the row's end, since an issue's title can hold a pipe.
+log_rows() {
+	awk -F'|' -v name="$1" '
+		function trim(s) { gsub(/^ +| +$/, "", s); return s }
+		NF >= 13 && trim($3) == name { print trim($(NF - 8)) "\t" trim($(NF - 2)) "\t" trim($(NF - 1)) }' "$tower/log.md"
 }
 
 # Sets the review commit status on SHA, which the main ruleset requires: STATE is pending, success, failure or error.
