@@ -21,7 +21,7 @@ bin=$tower/bin
 log=$tower/log.md
 model=claude-sonnet-5-5
 budget=3
-RUNS_PER_DAY=10
+RUNS_PER_DAY=25
 BRAD_REVISIONS=2
 # What the PR's review check says from the push until the reviewer starts, so it doesn't read as waiting on Brad.
 review_waiting="Automated reviewer: runs once CI finishes, not Brad's review"

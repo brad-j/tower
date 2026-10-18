@@ -119,7 +119,7 @@ loginctl enable-linger $USER    # keeps them running while logged out; already o
 - What it did: `journalctl --user -u tower@NAME -e`. When it's next due: `systemctl --user list-timers 'tower@*'`.
 - Pause a repository: `systemctl --user stop tower@NAME.timer` (until the next login or reboot) or `disable --now` (until it's enabled again).
 - A new repository's timer: `systemctl --user enable --now tower@NAME.timer`, after its first run by hand.
-- Limits, in `bin/novice` and `bin/review-pr`: 10 worker runs a day per repository, Sonnet 5.5 at medium effort, $3 and 30 minutes per worker run, $0.75 and 10 minutes per review, one agent PR open at a time, diffs up to 300 lines.
+- Limits, in `bin/novice` and `bin/review-pr`: 25 worker runs a day per repository, Sonnet 5.5 at medium effort, $3 and 30 minutes per worker run, $0.75 and 10 minutes per review, one agent PR open at a time, diffs up to 300 lines.
 
 ## Where things are kept
 
