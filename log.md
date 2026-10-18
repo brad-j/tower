@@ -22,3 +22,4 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-17 | gaidin | #5 `gaidin --version` | #11 | sonnet-5.5 medium | 10 | $0.13 | success | pass | | |
 | 2026-10-17 | moiraine | #8 Unsaved edits on pages are dropped on navigation or reload | #13 | sonnet-5.5 medium | 15 | $0.44 | success | block | | |
 | 2026-10-17 | moiraine | #8 revision (auto) | #13 | sonnet-5.5 medium | 13 | $0.19 | success on a rerun (flaky: e2e/browser.spec.ts:12:1 › an agent hands the browser over; the owner takes it over from the dock,  types into the page,  and is done) | block | | |
+| 2026-10-17 | moiraine | #8 revision (brad) | #13 | sonnet-5.5 medium | 10 | $0.21 | success on a rerun (flaky: `e2e/app.spec.ts:212:1 › an agent in the rail goes back to its conversation shown last, or home from its own conversation`) | pass | | |
