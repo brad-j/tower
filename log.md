@@ -28,3 +28,4 @@ One line per worker run that produced a PR or tried to. bin/novice writes the fi
 | 2026-10-17 | gaidin | #12 revision (auto) | #14 | sonnet-5.5 medium | 13 | $0.18 | success | pass | | |
 | 2026-10-17 | gaidin | #13 Activity and conversation events on the app-wide stream | #15 | sonnet-5.5 medium | 34 | $0.61 | success | block | | |
 | 2026-10-17 | silviana | #1 /api/usage: worker spend by day and repo from log.md, and tower's limits | #6 | sonnet-5.5 medium | 9 | $0.15 | success | pass | | |
+| 2026-10-17 | silviana | #2 A usage page: per-repo totals for 30 days and today, and the limits | #7 | sonnet-5.5 medium | 10 | $0.18 | success | pass | | |
