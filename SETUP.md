@@ -23,7 +23,7 @@ sudo pacman -S --needed bubblewrap git github-cli jq util-linux coreutils pnpm
 
 `bin/sandbox` puts `~/.local/share/pi-node/current/bin` first on the sandbox's PATH, so Node 22 and the worker's Claude Code must be there.
 
-- `~/.local/share/pi-node/current` is a symlink to an unpacked Node 22 release (`node-v22.23.2-linux-x64` on egwene).
+- `~/.local/share/pi-node/current` is a symlink to an unpacked Node 22 release (`node-v22.23.4-linux-x64` on egwene).
 - Install Claude Code into it: `~/.local/share/pi-node/current/bin/npm install -g @anthropic-ai/claude-code`. Update it the same way.
 - The reviewer uses the host's `claude`, which has to be logged in as Brad (`claude`, then `/login`).
 
